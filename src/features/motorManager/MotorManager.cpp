@@ -1,6 +1,7 @@
 #include "features/motorManager/MotorManager.h"
 #include <inttypes.h>
 #include "esp_timer.h"
+#include <features/espNowHandler/EspNowHandler.h>
 
 // Static member initializations
 SemaphoreHandle_t MotorManager::xControllerRequestMutex = xSemaphoreCreateMutex();
@@ -175,10 +176,7 @@ bool MotorManager::init(MPU9250 *imu)
     }
 
     // Send initial idle signal to arm ESCs
-    for (int i = 0; i < NUM_MOTORS; i++)
-    {
-        setMotorSpeed(i, 0);
-    }
+    armMotors();
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     ESP_LOGI(TAG_MOTOR_MANAGER, "Initialization complete");
@@ -248,10 +246,16 @@ void MotorManager::Task()
     ControllerRequestDTO lastControllerRequestDTO;
     MPU9250::Orientation currentOrientation;
     int64_t lastTime = esp_timer_get_time();
-    bool localIsMotorArmed = false;
 
     while (true)
     {
+        if (EspNowHandler::pingLost) {
+            if(isMotorArmed){
+                ESP_LOGW(TAG_MOTOR_MANAGER, "Ping lost - disarming motors for safety");
+                disarmMotors();
+            }
+        }
+
         currentOrientation = imu->getOrientation(); // Get current orientation from MPU9250
         ControllerRequestDTO controllerRequestDTO;
 
@@ -264,12 +268,10 @@ void MotorManager::Task()
                 if (*controllerRequestDTO.buttonMotorArming)
                 {
                     armMotors();
-                    localIsMotorArmed = isMotorArmed; // Update local copy
                 }
                 else
                 {
                     disarmMotors();
-                    localIsMotorArmed = false; // Update local copy
                 }
             }
 
@@ -285,7 +287,7 @@ void MotorManager::Task()
             xSemaphoreGive(xControllerRequestMutex);
         }
 
-        if (localIsMotorArmed && lastControllerRequestDTO.flightController != nullptr)
+        if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
         {
             // Compute dt (delta time) for PID calculations
             int64_t now = esp_timer_get_time();
@@ -338,7 +340,7 @@ void MotorManager::Task()
                 }
             }
         }
-        else if (!localIsMotorArmed)
+        else if (!isMotorArmed)
         {
             // Explicitly zero motors when disarmed for safety
             for (int i = 0; i < NUM_MOTORS; i++)

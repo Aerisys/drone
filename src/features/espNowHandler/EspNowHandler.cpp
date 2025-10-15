@@ -1,10 +1,17 @@
 #include <features/espNowHandler/EspNowHandler.h>
+#include "EspNowHandler.h"
+#include <PingRequestDTO.h>
+#include <esp_timer.h>
 
 uint8_t EspNowHandler::peer_mac[6] = ESP_DRONE_MAC;
 
 EspNowHandler::EspNowHandler() {}
 
 EspNowHandler::~EspNowHandler() {}
+
+int64_t EspNowHandler::lastPingTimeUs = 0;
+
+bool EspNowHandler::pingLost = false;
 
 bool EspNowHandler::init()
 {
@@ -22,8 +29,7 @@ bool EspNowHandler::init()
         return false;
     }
 
-    esp_now_register_recv_cb([](const esp_now_recv_info_t *info, const uint8_t *data, int len)
-                             {
+    esp_now_register_recv_cb([](const esp_now_recv_info_t *info, const uint8_t *data, int len){
         if (len == sizeof(ControllerRequestData)) {  
             ControllerRequestData receivedData;
             memcpy(&receivedData, data, sizeof(receivedData));  
@@ -39,7 +45,15 @@ bool EspNowHandler::init()
             }
     
             //ESP_LOGI(TAG_ESP_NOW, "Données reçues 2 : %s", controllerRequestDTO.toString().c_str());
-        } else {
+        } else if (len == sizeof(PingRequestDTO)){
+            PingRequestDTO ping;
+            memcpy(&ping, data, sizeof(PingRequestDTO));
+            ESP_LOGI(TAG_ESP_NOW, "Ping reçu : %s", ping.pingState ? "ON" : "OFF");
+
+            // Mettre à jour le timer
+            lastPingTimeUs = esp_timer_get_time();
+            EspNowHandler::pingLost = false;
+        }else {
             ESP_LOGE(TAG_ESP_NOW, "Taille incorrecte des données reçues !");
         } });
 
@@ -72,3 +86,34 @@ void EspNowHandler::send_data(const ControllerRequestData &requestData)
         ESP_LOGI(TAG_ESP_NOW, "Données envoyées");
     }
 }
+
+void EspNowHandler::send_ping()
+{
+    PingRequestDTO ping = {true};
+    if (esp_now_send(peer_mac, (uint8_t *)&ping, sizeof(ping)) != ESP_OK)
+    {
+        ESP_LOGI(TAG_ESP_NOW, "Erreur d'envoi du ping");
+    }
+    else
+    {
+        ESP_LOGI(TAG_ESP_NOW, "Ping envoyé");
+    }
+}
+
+void EspNowHandler::Task()
+{
+    while (true)
+    {
+        int64_t now = esp_timer_get_time();
+        if (lastPingTimeUs > 0) {
+            float dtSec = (now - lastPingTimeUs) * 1e-6f; // convertir en secondes
+            if (dtSec > 2.0f && !EspNowHandler::pingLost) {
+                ESP_LOGW(TAG_ESP_NOW, "Ping perdu !");
+                EspNowHandler::pingLost = true;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
