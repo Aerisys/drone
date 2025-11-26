@@ -2,16 +2,20 @@
 #define ESP_NOW_HANDLER_H
 
 #include "features/motorManager/MotorManager.h"
-
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_log.h>
 #include <string.h>
 #include <nvs_flash.h>
 
+#define REQ_MAGIC "AERISYS_DRONE_PAIR"
+#define RESP_MAGIC "PAIR_CONFIRM"
+
 #define TAG_ESP_NOW "ESP_NOW"
 
-#define ESP_DRONE_MAC {0xf8, 0xb3, 0xb7, 0x20, 0x38, 0xac}
+#define PIN_LED_ASSOCIATION GPIO_NUM_2
+
+#define PIN_BUTTON_ASSOCIATION GPIO_NUM_16
 
 class EspNowHandler
 {
@@ -26,12 +30,31 @@ public:
 
     static bool pingLost;
     static int64_t lastPingTimeUs;
+    static int64_t lastToggleTimeUs;
+    
+    // Pointeur statique pour accéder à l'instance depuis le callback C
+    static EspNowHandler* instance; 
 
 private:
     ControllerRequestDTO lastControllerRequestDTO;
-    static uint8_t peer_mac[6];
-
     
+    // Correction : déclaration simple sans nom de classe
+    uint8_t peer_mac[6] = {0}; 
+
+    bool _associationMode = false;
+    int64_t lastAssociationBroadcast = 0; // Correction syntaxe
+
+    bool loadPeerMacFromNvs();
+    bool savePeerMacToNvs();
+    void broadcastAssociationRequest();
+    void updateAssociationLed();
+    void resetAssociation();
+
+    bool currentLedState = false;
+
+    // Méthode statique pour le callback de réception
+    static void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len);
+    static void onDataSent(const uint8_t *macAddr, esp_now_send_status_t status);
 };
 
 #endif // ESP_NOW_HANDLER_H
