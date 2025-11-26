@@ -37,21 +37,21 @@ extern "C" void app_main(void)
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG_MAIN, "Failed to initialize MPU9250");
-        return;
+        //return;
     }
 
     err = imu->calibrate();
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG_MAIN, "Failed to start calibration");
-        return;
+        //return;
     }
 
     err = imu->startSensorTask();
     if (err != ESP_OK)
     {
         ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
-        return;
+        //return;
     }
 
 
@@ -67,4 +67,7 @@ extern "C" void app_main(void)
     xTaskCreate([](void *)
                 { motorManager->Task(); },
                 "MotorManagerTask", 4096, &motorManager, 5, nullptr);
+    xTaskCreate([](void *)
+                { espNowHandler->Task(); },
+                "EspNowHandlerTask", 4096, &espNowHandler, 5, nullptr);
 }
