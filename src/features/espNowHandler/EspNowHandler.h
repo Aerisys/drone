@@ -36,6 +36,9 @@ public:
     static EspNowHandler* instance; 
 
 private:
+    static void IRAM_ATTR button_isr_handler_pairing(void *arg);
+    volatile bool buttonPressedPairing = false;
+    
     ControllerRequestDTO lastControllerRequestDTO;
     
     // Correction : déclaration simple sans nom de classe

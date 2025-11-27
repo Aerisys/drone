@@ -81,16 +81,24 @@ bool EspNowHandler::init()
     gpio_set_direction(PIN_LED_ASSOCIATION, GPIO_MODE_OUTPUT); // Définit la broche en mode Sortie
     gpio_set_level(PIN_LED_ASSOCIATION, 0);
 
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pin_bit_mask = 1ULL << PIN_BUTTON_ASSOCIATION;   // ton bouton sur GPIO0 par exemple
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;     // active pull-up interne
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    gpio_config(&io_conf);
+    gpio_reset_pin(PIN_BUTTON_ASSOCIATION);
+    gpio_set_direction(PIN_BUTTON_ASSOCIATION, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_BUTTON_ASSOCIATION, GPIO_PULLUP_ONLY);
+
+    // 🔥 Ajout important
+    gpio_set_intr_type(PIN_BUTTON_ASSOCIATION, GPIO_INTR_NEGEDGE);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(PIN_BUTTON_ASSOCIATION, button_isr_handler_pairing, this);
 
 
     return true;
+}
+
+void IRAM_ATTR EspNowHandler::button_isr_handler_pairing(void *arg)
+{
+    EspNowHandler *self = static_cast<EspNowHandler *>(arg);
+    self->buttonPressedPairing = true;
 }
 
 // Fonction Callback de réception (Statique)
@@ -135,7 +143,7 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
             ESP_LOGI(TAG_ESP_NOW, "Paquet d'association reçu MAC: %02x:%02x:%02x:%02x:%02x:%02x",
                     resp.mac[0], resp.mac[1], resp.mac[2], resp.mac[3], resp.mac[4], resp.mac[5]);
 
-            memcpy(instance->peer_mac, resp.mac, 6);
+            memcpy(instance->peer_mac, info->src_addr, 6);
             instance->savePeerMacToNvs();
 
             // Vérifier si le peer existe déjà avant d'ajouter
@@ -218,11 +226,10 @@ void EspNowHandler::Task()
             }
         }
 
-        int pressed = gpio_get_level(PIN_BUTTON_ASSOCIATION);
-
-        if (pressed == 0 && _associationMode == false) {
+        if (buttonPressedPairing && _associationMode == false) {
             ESP_LOGI(TAG_ESP_NOW, "Bouton d'association pressé, lancement du RESET d'association.");
             resetAssociation();
+            buttonPressedPairing = false;
         }
         
         // Pas de vTaskDelay ici si cette fonction est appelée dans une boucle externe qui gère déjà le timing.
