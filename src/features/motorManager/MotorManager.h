@@ -49,9 +49,9 @@ private:
 
     const int escPins[NUM_MOTORS] = {
         26, // Avant gauche
-        17, // Avant droit
-        16, // Arrière droit
-        27  // Arrière gauche
+        25, // Avant droit
+        33, // Arrière droit
+        32  // Arrière gauche
     };
     MotorPwmConfig motorPwmConfigs[NUM_MOTORS];
 

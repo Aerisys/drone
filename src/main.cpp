@@ -47,12 +47,12 @@ extern "C" void app_main(void)
         //return;
     }
 
-    err = imu->startSensorTask();
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
+    //err = imu->startSensorTask();
+    //if (err != ESP_OK)
+    //{
+        //ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
         //return;
-    }
+    //}
 
 
     // Initialize ESP-NOW handlers
