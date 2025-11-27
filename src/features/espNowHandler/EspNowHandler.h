@@ -8,9 +8,6 @@
 #include <string.h>
 #include <nvs_flash.h>
 
-#define REQ_MAGIC "AERISYS_DRONE_PAIR"
-#define RESP_MAGIC "PAIR_CONFIRM"
-
 #define TAG_ESP_NOW "ESP_NOW"
 
 #define PIN_LED_ASSOCIATION GPIO_NUM_2
@@ -38,7 +35,7 @@ public:
 private:
     static void IRAM_ATTR button_isr_handler_pairing(void *arg);
     volatile bool buttonPressedPairing = false;
-    
+
     ControllerRequestDTO lastControllerRequestDTO;
     
     // Correction : déclaration simple sans nom de classe

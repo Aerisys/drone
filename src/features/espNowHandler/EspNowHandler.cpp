@@ -141,7 +141,7 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
             }
             
             ESP_LOGI(TAG_ESP_NOW, "Paquet d'association reçu MAC: %02x:%02x:%02x:%02x:%02x:%02x",
-                    resp.mac[0], resp.mac[1], resp.mac[2], resp.mac[3], resp.mac[4], resp.mac[5]);
+                    info->src_addr[0], info->src_addr[1], info->src_addr[2], info->src_addr[3], info->src_addr[4], info->src_addr[5]);
 
             memcpy(instance->peer_mac, info->src_addr, 6);
             instance->savePeerMacToNvs();
@@ -263,10 +263,6 @@ void EspNowHandler::broadcastAssociationRequest() {
     // 1. Remplissage du Magic (doit correspondre au récepteur !)
     // On copie "MY_PAIRING" (max 12 octets)
     strncpy(dto.magic, REQ_MAGIC, sizeof(dto.magic)); 
-
-    // 2. Remplissage du MAC
-    // On lit l'adresse MAC de l'interface Station
-    esp_read_mac(dto.mac, ESP_MAC_WIFI_STA); 
     
     // 3. Configuration du Broadcast
     uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
