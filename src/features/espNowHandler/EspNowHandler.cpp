@@ -4,6 +4,7 @@
 #include <esp_mac.h>
 #include <PairingPacket.h> // Assurez-vous que ce fichier existe
 #include "EspNowHandler.h"
+#include <mpuDTO.h>
 
 // Initialisation des membres statiques
 int64_t EspNowHandler::lastPingTimeUs = 0;
@@ -19,8 +20,9 @@ EspNowHandler::~EspNowHandler() {
     if (instance == this) instance = nullptr;
 }
 
-bool EspNowHandler::init()
+bool EspNowHandler::init(MPU9250 *imuTmp)
 {
+    this->imu = imuTmp;
     // Correction : une seule initialisation NVS
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -181,10 +183,14 @@ void EspNowHandler::send_data(const ControllerRequestData &requestData)
 {
     if (_associationMode) return; // Ne pas envoyer si on n'est pas associé
 
-    if (esp_now_send(peer_mac, (uint8_t *)&requestData, sizeof(requestData)) != ESP_OK)
-    {
-        ESP_LOGE(TAG_ESP_NOW, "Erreur d'envoi ESP-NOW");
-    }
+    esp_now_send(peer_mac, (uint8_t *)&requestData, sizeof(requestData));
+}
+
+void EspNowHandler::send_data(const mpuDTO &mpuData)
+{
+    if (_associationMode) return; // Ne pas envoyer si on n'est pas associé
+
+    esp_now_send(peer_mac, (uint8_t *)&mpuData, sizeof(mpuData));
 }
 
 void EspNowHandler::send_ping()
@@ -192,10 +198,7 @@ void EspNowHandler::send_ping()
     if (_associationMode) return;
 
     PingRequestDTO ping = {true};
-    if (esp_now_send(peer_mac, (uint8_t *)&ping, sizeof(ping)) != ESP_OK)
-    {
-        ESP_LOGE(TAG_ESP_NOW, "Erreur d'envoi du ping");
-    }
+    esp_now_send(peer_mac, (uint8_t *)&ping, sizeof(ping));
 }
 
 void EspNowHandler::Task()
@@ -230,6 +233,30 @@ void EspNowHandler::Task()
             ESP_LOGI(TAG_ESP_NOW, "Bouton d'association pressé, lancement du RESET d'association.");
             resetAssociation();
             buttonPressedPairing = false;
+        }
+
+        if(!_associationMode){
+            MPU9250::CalibrationStatus calibration = imu->getCalibrationStatus();
+            if(calibration == MPU9250::CalibrationStatus::CALIBRATED){
+                // Envoi périodique des données
+                if (now - lastSendData > 20000LL) { // Toutes les 20 ms
+                    lastSendData = now;
+
+                    MPU9250::Vector3 accel = imu->getAccel();
+                    MPU9250::Vector3 gyro = imu->getGyro();
+                    MPU9250::Vector3 mag = imu->getMag();
+                    MPU9250::Orientation orientation = imu->getOrientation();
+
+                    mpuDTO dto;
+                    dto.accel = accel;
+                    dto.gyro = gyro;
+                    dto.mag = mag;  
+                    dto.orientation = orientation; 
+
+                    send_data(dto);
+                }
+            }
+            
         }
         
         // Pas de vTaskDelay ici si cette fonction est appelée dans une boucle externe qui gère déjà le timing.

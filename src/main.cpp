@@ -23,14 +23,14 @@ extern "C" void app_main(void)
 
     // Initialize ESP-NOW
     espNowHandler = new EspNowHandler();
-    if (!espNowHandler->init())
+    imu = new MPU9250();
+    if (!espNowHandler->init(imu))
     {
         ESP_LOGE(TAG_MAIN, "ESP-NOW init failed!");
         return;
     }
 
     // Initialize MPU9250
-    imu = new MPU9250();
     imu->setFilterMode(MPU9250::MAHONY);
 
     esp_err_t err = imu->init(I2C_NUM_0, GPIO_NUM_21, GPIO_NUM_22); // Set appropriate SDA/SCL pins
@@ -47,12 +47,12 @@ extern "C" void app_main(void)
         //return;
     }
 
-    //err = imu->startSensorTask();
-    //if (err != ESP_OK)
-    //{
-        //ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
-        //return;
-    //}
+    err = imu->startSensorTask();
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
+        return;
+    }
 
 
     // Initialize ESP-NOW handlers

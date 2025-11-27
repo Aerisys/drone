@@ -7,6 +7,7 @@
 #include <esp_log.h>
 #include <string.h>
 #include <nvs_flash.h>
+#include <mpuDTO.h>
 
 #define TAG_ESP_NOW "ESP_NOW"
 
@@ -20,8 +21,9 @@ public:
     EspNowHandler();
     ~EspNowHandler();
 
-    bool init();
+    bool init(MPU9250 *imu);
     void send_data(const ControllerRequestData &requestData);
+    void send_data(const mpuDTO &mpuData);
     void send_ping();
     void Task();
 
@@ -33,6 +35,7 @@ public:
     static EspNowHandler* instance; 
 
 private:
+    MPU9250 *imu = nullptr;
     static void IRAM_ATTR button_isr_handler_pairing(void *arg);
     volatile bool buttonPressedPairing = false;
 
@@ -43,6 +46,7 @@ private:
 
     bool _associationMode = false;
     int64_t lastAssociationBroadcast = 0; // Correction syntaxe
+    int64_t lastSendData= 0; 
 
     bool loadPeerMacFromNvs();
     bool savePeerMacToNvs();
