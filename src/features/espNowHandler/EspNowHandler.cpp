@@ -87,20 +87,8 @@ bool EspNowHandler::init(MPU9250 *imuTmp)
     gpio_set_direction(PIN_BUTTON_ASSOCIATION, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_BUTTON_ASSOCIATION, GPIO_PULLUP_ONLY);
 
-    // 🔥 Ajout important
-    gpio_set_intr_type(PIN_BUTTON_ASSOCIATION, GPIO_INTR_NEGEDGE);
-
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(PIN_BUTTON_ASSOCIATION, button_isr_handler_pairing, this);
-
 
     return true;
-}
-
-void IRAM_ATTR EspNowHandler::button_isr_handler_pairing(void *arg)
-{
-    EspNowHandler *self = static_cast<EspNowHandler *>(arg);
-    self->buttonPressedPairing = true;
 }
 
 // Fonction Callback de réception (Statique)
@@ -206,6 +194,7 @@ void EspNowHandler::Task()
     while (true){
     
         updateAssociationLed();
+        handleButtonPressLogic();
         // Broadcast Association
         if (_associationMode) {
             int64_t now = esp_timer_get_time();
@@ -227,12 +216,6 @@ void EspNowHandler::Task()
                 // Optionnel : repasser en mode association si ping perdu trop longtemps ?
                 // _associationMode = true; 
             }
-        }
-
-        if (buttonPressedPairing && _associationMode == false) {
-            ESP_LOGI(TAG_ESP_NOW, "Bouton d'association pressé, lancement du RESET d'association.");
-            resetAssociation();
-            buttonPressedPairing = false;
         }
 
         if(!_associationMode){
@@ -334,6 +317,9 @@ void EspNowHandler::updateAssociationLed() {
             ESP_LOGD(TAG_ESP_NOW, "LED Association : Attente pour le prochain basculement.");
         }
         
+    } else if(buttonPressed && !buttonLogPressedSucess){
+        gpio_set_level(PIN_LED_ASSOCIATION, true);
+        currentLedState = true;
     } else {
         currentLedState = false;
         gpio_set_level(PIN_LED_ASSOCIATION, currentLedState); 
@@ -370,4 +356,35 @@ void EspNowHandler::resetAssociation() {
     // 4. Activation du mode association
     _associationMode = true;
     lastAssociationBroadcast = 0; // Force le broadcast immédiat
+}
+
+
+void EspNowHandler::handleButtonPressLogic() {
+    // 1. Lire l'état du GPIO pour voir si le bouton est pressé
+    bool isPressedNow = gpio_get_level(PIN_BUTTON_ASSOCIATION) == 0; // Assumer Pull-up (0 = pressé)
+
+    // 2. Détection d'appui initial
+    if (isPressedNow && !buttonPressed && !_associationMode && !buttonLogPressedSucess) {
+        buttonPressed = true;
+        buttonLogPressedSucess = false;
+        pressStartTime = esp_timer_get_time() / 1000; // Enregistrement en ms
+        ESP_LOGI("BUTTON", "Button Pressed. Starting timer.");
+    }
+    // 3. Détection de maintien de l'appui
+    else if (isPressedNow && buttonPressed && !buttonLogPressedSucess) {
+        int64_t holdTime = (esp_timer_get_time() / 1000) - pressStartTime;
+        
+        if (holdTime >= LONG_PRESS_MS && !_associationMode) {
+            buttonLogPressedSucess = true;
+            ESP_LOGW("BUTTON", "Long Press Detected (%lld ms)! Entering Pairing Mode.", holdTime);
+            resetAssociation();
+        }
+    }
+    // 4. Détection de relâchement
+    else if (!isPressedNow && buttonPressed) {
+        // Réinitialisation de l'état
+        buttonLogPressedSucess = false;
+        buttonPressed = false;
+        pressStartTime = 0;
+    }
 }
