@@ -23,7 +23,7 @@ public:
     EspNowHandler();
     ~EspNowHandler();
 
-    bool init(MPU9250 *imu);
+    bool init(MPU9250 *imu, MotorManager *motorManager);
     void send_data(const ControllerRequestData &requestData);
     void send_data(const mpuDTO &mpuData);
     void send_ping();
@@ -38,6 +38,7 @@ public:
 
 private:
     MPU9250 *imu = nullptr;
+    MotorManager *motorManager = nullptr;
     
     volatile bool buttonPressed = false;
     volatile bool buttonLogPressedSucess = false;

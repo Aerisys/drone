@@ -35,6 +35,9 @@ public:
     void armMotors();
     void Task();
 
+    void getMotorSpeeds(float output[NUM_MOTORS]);
+    SemaphoreHandle_t xMotorSpeedMutex = nullptr;
+
     static SemaphoreHandle_t xControllerRequestMutex;
     static ControllerRequestDTO currentControllerRequestDTO;
 

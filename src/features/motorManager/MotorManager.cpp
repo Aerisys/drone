@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include "esp_timer.h"
 #include <features/espNowHandler/EspNowHandler.h>
+#include "MotorManager.h"
 
 // Static member initializations
 SemaphoreHandle_t MotorManager::xControllerRequestMutex = xSemaphoreCreateMutex();
@@ -9,10 +10,15 @@ ControllerRequestDTO MotorManager::currentControllerRequestDTO;
 
 MotorManager::MotorManager()
 {
+    xMotorSpeedMutex = xSemaphoreCreateMutex();
     // Initialize motor speeds to zero
     for (int i = 0; i < NUM_MOTORS; i++)
     {
-        motorSpeeds[i] = 0.0f;
+        if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+            motorSpeeds[i] = 0.0f;
+            xSemaphoreGive(xMotorSpeedMutex);
+        }
+        
     }
 }
 
@@ -221,8 +227,12 @@ void MotorManager::disarmMotors()
     isMotorArmed = false;
     for (int i = 0; i < NUM_MOTORS; i++)
     {
-        motorSpeeds[i] = 0;
-        mcpwm_comparator_set_compare_value(motorPwmConfigs[i].comparator, MIN_PULSE_TICKS);
+        if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+            motorSpeeds[i] = 0;
+            mcpwm_comparator_set_compare_value(motorPwmConfigs[i].comparator, MIN_PULSE_TICKS);
+            xSemaphoreGive(xMotorSpeedMutex);
+        }
+        
     }
     ESP_LOGW(TAG_MOTOR_MANAGER, "disable Motor Arming");
 }
@@ -246,6 +256,8 @@ void MotorManager::Task()
     ControllerRequestDTO lastControllerRequestDTO;
     MPU9250::Orientation currentOrientation;
     int64_t lastTime = esp_timer_get_time();
+
+    float dif_PULSE_TICKS = MAX_PULSE_TICKS-MIN_PULSE_TICKS;
 
     while (true)
     {
@@ -286,7 +298,6 @@ void MotorManager::Task()
             }
             xSemaphoreGive(xControllerRequestMutex);
         }
-
         if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
         {
             // Compute dt (delta time) for PID calculations
@@ -302,42 +313,41 @@ void MotorManager::Task()
             // float targetPitch = lastControllerRequestDTO.flightController->pitch * MAX_ANGLE; // Convert to euler angles
             // float targetRoll = lastControllerRequestDTO.flightController->roll * MAX_ANGLE;   // Convert to euler angles
             // float targetYaw = lastControllerRequestDTO.flightController->yaw * MAX_YAW_RATE;     // Convert to euler angles per second
-            float targetThrottle = lastControllerRequestDTO.flightController->throttle * 1000.0f; // Convert to throttle value
-            if (targetThrottle < MIN_PULSE_TICKS)
+            float targetThrottle = lastControllerRequestDTO.flightController->throttle * dif_PULSE_TICKS; // Convert to throttle value
+
+            float correctionPitch = pidPitch.calculate(targetPitch, currentOrientation.pitch, dt);
+            float correctionRoll = pidRoll.calculate(targetRoll, currentOrientation.roll, dt);
+
+            // Fix yaw correction calculation
+            float yawError = targetYaw - currentOrientation.yaw;
+            // Normalize to [-180, 180]
+            if (yawError > 180.0f)
             {
-                for (int i = 0; i < NUM_MOTORS; i++)
-                {
-                    setMotorSpeed(i, 0);
-                }
+                yawError -= 360.0f;
             }
-            else
+            else if (yawError < -180.0f)
             {
-                float correctionPitch = pidPitch.calculate(targetPitch, currentOrientation.pitch, dt);
-                float correctionRoll = pidRoll.calculate(targetRoll, currentOrientation.roll, dt);
+                yawError += 360.0f;
+            }
+            float correctionYaw = pidYaw.calculate(targetYaw, currentOrientation.yaw, dt);
 
-                // Fix yaw correction calculation
-                float yawError = targetYaw - currentOrientation.yaw;
-                // Normalize to [-180, 180]
-                if (yawError > 180.0f)
-                {
-                    yawError -= 360.0f;
-                }
-                else if (yawError < -180.0f)
-                {
-                    yawError += 360.0f;
-                }
-                float correctionYaw = pidYaw.calculate(targetYaw, currentOrientation.yaw, dt);
-
+            if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
                 motorSpeeds[0] = targetThrottle + correctionPitch + correctionRoll + correctionYaw; // Moteur 0 : avant-gauche
                 motorSpeeds[1] = targetThrottle + correctionPitch - correctionRoll - correctionYaw; // Moteur 1 : avant-droit
                 motorSpeeds[2] = targetThrottle - correctionPitch - correctionRoll - correctionYaw; // Moteur 2 : arrière-droit
                 motorSpeeds[3] = targetThrottle - correctionPitch + correctionRoll + correctionYaw; // Moteur 3 : arrière-gauche
+                xSemaphoreGive(xMotorSpeedMutex);
+            }
+            
 
-                // Set motor speeds with clamping
-                for (int i = 0; i < NUM_MOTORS; i++)
-                {
+            // Set motor speeds with clamping
+            for (int i = 0; i < NUM_MOTORS; i++)
+            {
+                if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
                     setMotorSpeed(i, motorSpeeds[i]);
+                    xSemaphoreGive(xMotorSpeedMutex);
                 }
+                
             }
         }
         else if (!isMotorArmed)
@@ -350,5 +360,12 @@ void MotorManager::Task()
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+void MotorManager::getMotorSpeeds(float output[NUM_MOTORS]) {
+    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+        memcpy(output, motorSpeeds, sizeof(float) * NUM_MOTORS);
+        xSemaphoreGive(xMotorSpeedMutex);
     }
 }
