@@ -36,6 +36,9 @@ bool EspNowHandler::init(MPU9250 *imuTmp)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    ESP_ERROR_CHECK(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N));
+    esp_wifi_config_80211_tx_rate(WIFI_IF_STA, WIFI_PHY_RATE_54M);
+
     // Init ESP-NOW
     if (esp_now_init() != ESP_OK) {
         ESP_LOGE(TAG_ESP_NOW, "Erreur d'init ESP-NOW");
