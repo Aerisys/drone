@@ -24,7 +24,8 @@ extern "C" void app_main(void)
     // Initialize ESP-NOW
     espNowHandler = new EspNowHandler();
     imu = new MPU9250();
-    if (!espNowHandler->init(imu))
+    motorManager = new MotorManager();
+    if (!espNowHandler->init(imu, motorManager))
     {
         ESP_LOGE(TAG_MAIN, "ESP-NOW init failed!");
         return;
@@ -56,7 +57,6 @@ extern "C" void app_main(void)
 
 
     // Initialize ESP-NOW handlers
-    motorManager = new MotorManager();
     if (!motorManager->init(imu))
     {
         ESP_LOGE("MAIN", "MotorManager init failed!");

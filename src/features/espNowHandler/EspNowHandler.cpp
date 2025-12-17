@@ -20,9 +20,10 @@ EspNowHandler::~EspNowHandler() {
     if (instance == this) instance = nullptr;
 }
 
-bool EspNowHandler::init(MPU9250 *imuTmp)
+bool EspNowHandler::init(MPU9250 *imuTmp,MotorManager *motorManager)
 {
     this->imu = imuTmp;
+    this->motorManager = motorManager;
     // Correction : une seule initialisation NVS
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -223,10 +224,17 @@ void EspNowHandler::Task()
 
         if(!_associationMode){
             MPU9250::CalibrationStatus calibration = imu->getCalibrationStatus();
+
             if(calibration == MPU9250::CalibrationStatus::CALIBRATED){
                 // Envoi périodique des données
                 if (now - lastSendData > 20000LL) { // Toutes les 20 ms
                     lastSendData = now;
+
+                    float motorSpeeds[NUM_MOTORS] ={0};
+                    motorManager->getMotorSpeeds(motorSpeeds);
+
+                    ESP_LOGI(TAG_ESP_NOW, "ESPNOWHANDLER Motor Speeds: [%.2f, %.2f, %.2f, %.2f]", 
+                             motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
 
                     MPU9250::Vector3 accel = imu->getAccel();
                     MPU9250::Vector3 gyro = imu->getGyro();
