@@ -247,6 +247,11 @@ void EspNowHandler::Task()
                     dto.mag = mag;  
                     dto.orientation = orientation; 
 
+                    dto.motorSpeeds[0] = motorSpeeds[0];
+                    dto.motorSpeeds[1] = motorSpeeds[1];
+                    dto.motorSpeeds[2] = motorSpeeds[2];
+                    dto.motorSpeeds[3] = motorSpeeds[3];
+
                     send_data(dto);
                 }
             }
