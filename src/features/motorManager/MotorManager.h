@@ -20,7 +20,10 @@
 class MotorManager
 {
 public:
-    MotorManager();
+
+    bool modeHIL;
+
+    MotorManager(bool modeHIL = false);
     ~MotorManager();
     bool init(MPU9250 *imu);
 

@@ -8,8 +8,13 @@
 SemaphoreHandle_t MotorManager::xControllerRequestMutex = xSemaphoreCreateMutex();
 ControllerRequestDTO MotorManager::currentControllerRequestDTO;
 
-MotorManager::MotorManager()
+MotorManager::MotorManager(bool modeHIL)
 {
+    this->modeHIL = modeHIL;
+
+    if(this->modeHIL){
+        return;
+    }
     xMotorSpeedMutex = xSemaphoreCreateMutex();
     // Initialize motor speeds to zero
     for (int i = 0; i < NUM_MOTORS; i++)
@@ -30,6 +35,10 @@ MotorManager::~MotorManager()
 // Function to initialize the motor manager
 bool MotorManager::init(MPU9250 *imu)
 {
+    if(this->modeHIL){
+        isMotorArmed = true;
+        return true;
+    }
     ESP_LOGI(TAG_MOTOR_MANAGER, "Initializing MCPWM...");
     this->imu = imu;
 
@@ -264,11 +273,22 @@ void MotorManager::Task()
         if (EspNowHandler::pingLost) {
             if(isMotorArmed){
                 ESP_LOGW(TAG_MOTOR_MANAGER, "Ping lost - disarming motors for safety");
-                disarmMotors();
+                if(modeHIL){
+                    isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
+                }
+                else{
+                    disarmMotors();
+                }
             }
         }
 
-        currentOrientation = imu->getOrientation(); // Get current orientation from MPU9250
+        if(modeHIL){
+            //recive currentOrientation  usb since unity
+        }
+        else{
+            currentOrientation = imu->getOrientation(); // Get current orientation from MPU9250
+        }
+        
         ControllerRequestDTO controllerRequestDTO;
 
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
@@ -279,11 +299,21 @@ void MotorManager::Task()
             {
                 if (*controllerRequestDTO.buttonMotorArming)
                 {
-                    armMotors();
+                    if(modeHIL){
+                        isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
+                    }
+                    else{
+                        armMotors();
+                    }
                 }
                 else
                 {
-                    disarmMotors();
+                    if(modeHIL){
+                        isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
+                    }
+                    else{
+                        disarmMotors();
+                    }
                 }
             }
 
@@ -340,14 +370,19 @@ void MotorManager::Task()
             }
             
 
-            // Set motor speeds with clamping
-            for (int i = 0; i < NUM_MOTORS; i++)
-            {
-                if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
-                    setMotorSpeed(i, motorSpeeds[i]);
-                    xSemaphoreGive(xMotorSpeedMutex);
+            if(modeHIL){
+                //send motorSpeeds[0] to motorSpeeds[3] to usb for unity
+            }
+            else{
+                // Set motor speeds with clamping
+                for (int i = 0; i < NUM_MOTORS; i++)
+                {
+                    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+                        setMotorSpeed(i, motorSpeeds[i]);
+                        xSemaphoreGive(xMotorSpeedMutex);
+                    }
+                    
                 }
-                
             }
         }
         else if (!isMotorArmed)
