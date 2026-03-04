@@ -25,7 +25,10 @@ public:
 
     MotorManager(bool modeHIL = false);
     ~MotorManager();
-    bool init(MPU9250 *imu);
+    // In normal mode, imu must be provided.  In HIL mode, imu may be null
+    // and a ControllerUSB instance must be passed instead so that orientation
+    // can be read from the host.
+    bool init(MPU9250 *imu, class ControllerUSB *usb = nullptr);
 
     /*
     * @brief Set the speed of a motor.
@@ -87,6 +90,9 @@ private:
     PidManager pidYaw{yawkp, yawki, yawkd};  // PID controller for roll
 
     MPU9250 *imu;
+    // when running in HIL mode the orientation is fetched from usbController
+    // and motor outputs are forwarded through it as well.
+    class ControllerUSB *usbController = nullptr;
 };
 
 #endif

@@ -1,5 +1,6 @@
 #include "features/espNowHandler/EspNowHandler.h"
 #include "features/motorManager/MotorManager.h"
+#include "features/controllerUSB/ControllerUSB.h"
 
 #include "mpu9250.h"
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,14 @@ extern "C" void app_main(void)
     // Initialize ESP-NOW
     espNowHandler = new EspNowHandler();
     imu = new MPU9250();
-    motorManager = new MotorManager();
+    motorManager = new MotorManager(true);
+
+    // prepare USB controller for HIL mode
+    ControllerUSB *usbController = nullptr;
+    if (motorManager->modeHIL) {
+        usbController = new ControllerUSB();
+    }
+
     if (!espNowHandler->init(imu, motorManager))
     {
         ESP_LOGE(TAG_MAIN, "ESP-NOW init failed!");
@@ -57,7 +65,7 @@ extern "C" void app_main(void)
 
 
     // Initialize ESP-NOW handlers
-    if (!motorManager->init(imu))
+    if (!motorManager->init(imu, usbController))
     {
         ESP_LOGE("MAIN", "MotorManager init failed!");
         return;

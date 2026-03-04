@@ -4,6 +4,10 @@
 #include <features/espNowHandler/EspNowHandler.h>
 #include "MotorManager.h"
 
+// when running in HIL mode we rely on the USB controller to receive orientation
+// and to send motor outputs back to the host.
+#include "features/controllerUSB/ControllerUSB.h"
+
 // Static member initializations
 SemaphoreHandle_t MotorManager::xControllerRequestMutex = xSemaphoreCreateMutex();
 ControllerRequestDTO MotorManager::currentControllerRequestDTO;
@@ -33,12 +37,19 @@ MotorManager::~MotorManager()
 }
 
 // Function to initialize the motor manager
-bool MotorManager::init(MPU9250 *imu)
+bool MotorManager::init(MPU9250 *imu, ControllerUSB *usb)
 {
-    if(this->modeHIL){
+    // in HIL mode we rely on the USB controller for orientation and motor
+    // output.  the caller has responsibility to pass a valid pointer.
+    if (this->modeHIL) {
         isMotorArmed = true;
+        usbController = usb;
+        if (usbController) {
+            usbController->init();
+        }
         return true;
     }
+
     ESP_LOGI(TAG_MOTOR_MANAGER, "Initializing MCPWM...");
     this->imu = imu;
 
@@ -282,10 +293,12 @@ void MotorManager::Task()
             }
         }
 
-        if(modeHIL){
-            //recive currentOrientation  usb since unity
-        }
-        else{
+        if (modeHIL) {
+            // fetch orientation from the USB controller instead of the IMU
+            if (usbController) {
+                currentOrientation = usbController->getOrientation();
+            }
+        } else {
             currentOrientation = imu->getOrientation(); // Get current orientation from MPU9250
         }
         
@@ -370,10 +383,12 @@ void MotorManager::Task()
             }
             
 
-            if(modeHIL){
-                //send motorSpeeds[0] to motorSpeeds[3] to usb for unity
-            }
-            else{
+            if (modeHIL) {
+                // send the computed motor speeds back to the host over USB
+                if (usbController) {
+                    usbController->setData(motorSpeeds, NUM_MOTORS);
+                }
+            } else {
                 // Set motor speeds with clamping
                 for (int i = 0; i < NUM_MOTORS; i++)
                 {
