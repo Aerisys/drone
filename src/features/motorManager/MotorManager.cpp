@@ -312,6 +312,10 @@ void MotorManager::Task()
 
     float dif_PULSE_TICKS = MAX_PULSE_TICKS-MIN_PULSE_TICKS;
 
+    if(modeHIL){
+        lastControllerRequestDTO.flightController = new FlightController();
+    }
+
     while (true)
     {
         // Log on first iteration to confirm HIL mode and controller status
@@ -367,10 +371,6 @@ void MotorManager::Task()
                 lastControllerRequestDTO = controllerRequestDTO;
             }
             xSemaphoreGive(xControllerRequestMutex);
-        }
-
-        if(modeHIL){
-            lastControllerRequestDTO.flightController = new FlightController();
         }
 
         if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
