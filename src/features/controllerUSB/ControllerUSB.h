@@ -2,13 +2,14 @@
 
 #include "mpu9250.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
 #include <cstring>
 /**
  * @brief Simple USB controller used in Hardware-in-the-Loop (HIL) mode.
  *
- * The class communicates over the Serial (USB) interface with a host
- * application (e.g. Unity or a custom PC tool). The protocol is extremely
- * lightweight and text-based:
+ * The class communicates over UART2 (GPIO16=RX, GPIO17=TX) with a host
+ * application (e.g. Unity or a custom PC tool). This avoids interfering with
+ * the system logs on UART0. The protocol is text-based:
  *
  *   - Orientation updates are received from the host as lines starting with
  *     "O:" followed by three floats (pitch roll yaw) separated by spaces.
@@ -51,6 +52,9 @@ private:
     // read a line from UART0 into the provided buffer, returns true if a
     // complete line (terminated by '\n') was received.
     bool readLine(char *buf, size_t maxLen);
+
+    char _uartBuffer[256];         // accumulate incoming UART data
+    size_t _uartBufferLen = 0;    // current position in buffer
 
 private:
     void readOrientationPacket();

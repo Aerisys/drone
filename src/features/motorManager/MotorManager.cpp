@@ -15,11 +15,12 @@ ControllerRequestDTO MotorManager::currentControllerRequestDTO;
 MotorManager::MotorManager(bool modeHIL)
 {
     this->modeHIL = modeHIL;
+    xMotorSpeedMutex = xSemaphoreCreateMutex();
 
     if(this->modeHIL){
         return;
     }
-    xMotorSpeedMutex = xSemaphoreCreateMutex();
+    
     // Initialize motor speeds to zero
     for (int i = 0; i < NUM_MOTORS; i++)
     {
@@ -281,6 +282,15 @@ void MotorManager::Task()
 
     while (true)
     {
+        // Log on first iteration to confirm HIL mode and controller status
+        static bool first = true;
+        if (first) {
+            ESP_LOGI(TAG_MOTOR_MANAGER, "MotorManager Task started - modeHIL=%s, usbController=%s",
+                     modeHIL ? "yes" : "no",
+                     (modeHIL && usbController) ? "active" : "none");
+            first = false;
+        }
+
         if (EspNowHandler::pingLost) {
             if(isMotorArmed){
                 ESP_LOGW(TAG_MOTOR_MANAGER, "Ping lost - disarming motors for safety");
@@ -341,6 +351,11 @@ void MotorManager::Task()
             }
             xSemaphoreGive(xControllerRequestMutex);
         }
+
+        if(modeHIL){
+            lastControllerRequestDTO.flightController = new FlightController();
+        }
+
         if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
         {
             // Compute dt (delta time) for PID calculations
@@ -382,11 +397,16 @@ void MotorManager::Task()
                 xSemaphoreGive(xMotorSpeedMutex);
             }
             
-
+            
             if (modeHIL) {
                 // send the computed motor speeds back to the host over USB
                 if (usbController) {
-                    usbController->setData(motorSpeeds, NUM_MOTORS);
+                    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+                        usbController->setData(motorSpeeds, NUM_MOTORS);
+                        xSemaphoreGive(xMotorSpeedMutex);
+                    }
+                } else {
+                    ESP_LOGE(TAG_MOTOR_MANAGER, "HIL mode but usbController is null!");
                 }
             } else {
                 // Set motor speeds with clamping
@@ -408,6 +428,8 @@ void MotorManager::Task()
                 setMotorSpeed(i, 0);
             }
         }
+
+
 
         vTaskDelay(pdMS_TO_TICKS(10));
     }

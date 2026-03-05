@@ -41,19 +41,36 @@ MPU9250::Orientation ControllerUSB::getOrientation()
 
 bool ControllerUSB::readLine(char *buf, size_t maxLen)
 {
-    size_t len = 0;
-    while (len + 1 < maxLen) {
-        uint8_t ch;
-        int r = uart_read_bytes(UART_NUM, &ch, 1, pdMS_TO_TICKS(10));
-        if (r <= 0) {
-            break; // no data available right now
-        }
-        buf[len++] = static_cast<char>(ch);
-        if (ch == '\n') {
-            buf[len] = '\0';
-            return true;
+    // Read available bytes from UART into the accumulation buffer
+    size_t available = uart_read_bytes(UART_NUM, (uint8_t*)_uartBuffer + _uartBufferLen, 
+                                        sizeof(_uartBuffer) - _uartBufferLen - 1, 
+                                        pdMS_TO_TICKS(50));
+    
+    if (available > 0) {
+        _uartBufferLen += available;
+        _uartBuffer[_uartBufferLen] = '\0'; // null-terminate for debugging
+    }
+
+    // Look for a complete line (newline character)
+    for (size_t i = 0; i < _uartBufferLen; i++) {
+        if (_uartBuffer[i] == '\n') {
+            // Found a newline - extract the line
+            size_t lineLen = i + 1;  // include the newline
+            if (lineLen < maxLen) {
+                memcpy(buf, _uartBuffer, lineLen);
+                buf[lineLen] = '\0';
+                
+                // Shift remaining data in buffer
+                memmove(_uartBuffer, _uartBuffer + lineLen, _uartBufferLen - lineLen);
+                _uartBufferLen -= lineLen;
+                
+                ESP_LOGV(TAG, "RX line: %s", buf);
+                return true;
+            }
+            break;
         }
     }
+    
     return false;
 }
 
@@ -68,7 +85,12 @@ void ControllerUSB::readOrientationPacket()
                 _orientation.pitch = p;
                 _orientation.roll = r;
                 _orientation.yaw = y;
+                ESP_LOGD(TAG, "Orientation RX: pitch=%.2f roll=%.2f yaw=%.2f", p, r, y);
+            } else {
+                ESP_LOGW(TAG, "Failed to parse orientation from: %s", line);
             }
+        } else {
+            ESP_LOGW(TAG, "Unknown packet type: %s", line);
         }
     }
 }
@@ -82,5 +104,6 @@ void ControllerUSB::setData(const float motorSpeeds[], int numMotors)
         off += snprintf(buf + off, sizeof(buf) - off, " %.4f", motorSpeeds[i]);
     }
     off += snprintf(buf + off, sizeof(buf) - off, "\n");
-    uart_write_bytes(UART_NUM, buf, off);
+    uart_write_bytes(UART_NUM, (const char*)buf, off);
+    ESP_LOGD(TAG, "Motor TX: %s", buf);
 }
