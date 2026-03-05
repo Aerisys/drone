@@ -70,7 +70,7 @@ private:
     static constexpr uint32_t PERIOD_TICKS = TIMER_RESOLUTION_HZ / PWM_FREQ_HZ; // 20000 ticks for 20ms period
     static constexpr uint32_t MIN_PULSE_TICKS = 1000;                           // 1000µs pulse width (idle)
     static constexpr uint32_t MAX_PULSE_TICKS = 2000;                           // 2000µs pulse width (full throttle)
-    static constexpr uint32_t MAX_ANGLE = 30; // Maximum angle for roll and pitch in degrees
+    static constexpr uint32_t MAX_ANGLE = 60; // Maximum angle for roll and pitch in degrees
     static constexpr uint32_t MAX_YAW_RATE = 45; // Maximum yaw rate in degrees per second
 
     static constexpr float pkp = 4.8f;  // Proportional gain

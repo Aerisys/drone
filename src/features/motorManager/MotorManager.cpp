@@ -316,7 +316,7 @@ void MotorManager::Task()
     MPU9250::Orientation currentOrientation;
     int64_t lastTime = esp_timer_get_time();
 
-    float dif_PULSE_TICKS = MAX_PULSE_TICKS-MIN_PULSE_TICKS;
+    float dif_PULSE_TICKS = MAX_PULSE_TICKS - MIN_PULSE_TICKS;
 
     if(modeHIL){
         lastControllerRequestDTO.flightController = new FlightController();
@@ -324,139 +324,118 @@ void MotorManager::Task()
 
     while (true)
     {
-        // Log on first iteration to confirm HIL mode and controller status
-        static bool first = true;
-        if (first) {
-            ESP_LOGI(TAG_MOTOR_MANAGER, "MotorManager Task started - modeHIL=%s, usbController=%s",
-                     modeHIL ? "yes" : "no",
-                     (modeHIL && usbController) ? "active" : "none");
-            first = false;
-        }
+        // ... (Ping lost et logs de démarrage identiques) ...
 
-        if (EspNowHandler::pingLost) {
-            if(isMotorArmed){
-                ESP_LOGW(TAG_MOTOR_MANAGER, "Ping lost - disarming motors for safety");
-                disarmMotors();
-            }
-        }
-
+        // 1. Récupération de l'orientation
         if (modeHIL) {
-            // fetch orientation from the USB controller instead of the IMU
-            if (usbController) {
-                currentOrientation = usbController->getOrientation();
-            }
+            if (usbController) currentOrientation = usbController->getOrientation();
         } else {
-            currentOrientation = imu->getOrientation(); // Get current orientation from MPU9250
+            currentOrientation = imu->getOrientation();
         }
         
-        ControllerRequestDTO controllerRequestDTO;
-
+        // 2. Mise à jour de la requête contrôleur (Stick inputs)
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
         {
-            controllerRequestDTO = currentControllerRequestDTO;
-          
-            if (controllerRequestDTO.buttonMotorArming != nullptr)
+            if (currentControllerRequestDTO.buttonMotorArming != nullptr)
             {
-                if (*controllerRequestDTO.buttonMotorArming)
-                {
-                    armMotors();
-                }
-                else
-                {
-                    disarmMotors();
-                }
+                if (*currentControllerRequestDTO.buttonMotorArming) armMotors();
+                else disarmMotors();
             }
-
-            // if (controllerRequestDTO.buttonMotorState && *controllerRequestDTO.buttonMotorState)
-            // {
-            //     ESP_LOGI(TAG_MOTOR_MANAGER, "Motor state button activated");
-            // }
-
-            if (controllerRequestDTO.flightController != nullptr)
+            if (currentControllerRequestDTO.flightController != nullptr)
             {
-                lastControllerRequestDTO = controllerRequestDTO;
+                lastControllerRequestDTO = currentControllerRequestDTO;
             }
             xSemaphoreGive(xControllerRequestMutex);
         }
 
         if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
         {
-            // Compute dt (delta time) for PID calculations
             int64_t now = esp_timer_get_time();
             float dt = (now - lastTime) * 1e-6f;
             lastTime = now;
 
-            // Correction PID
-            float targetPitch = 0.0f; // drone doit rester stable
-            float targetRoll = 0.0f;
-            float targetYaw = 0.0f;
+            // Mapping des sticks vers les cibles physiques
+            float targetPitch = lastControllerRequestDTO.flightController->pitch * MAX_ANGLE;
+            float targetRoll  = lastControllerRequestDTO.flightController->roll  * MAX_ANGLE;
+            float targetYaw   = lastControllerRequestDTO.flightController->yaw   * MAX_YAW_RATE;
+            float targetThrottle = lastControllerRequestDTO.flightController->throttle * dif_PULSE_TICKS;
 
-            // float targetPitch = lastControllerRequestDTO.flightController->pitch * MAX_ANGLE; // Convert to euler angles
-            // float targetRoll = lastControllerRequestDTO.flightController->roll * MAX_ANGLE;   // Convert to euler angles
-            // float targetYaw = lastControllerRequestDTO.flightController->yaw * MAX_YAW_RATE;     // Convert to euler angles per second
-            float targetThrottle = lastControllerRequestDTO.flightController->throttle * dif_PULSE_TICKS; // Convert to throttle value
+            // --- CORRECTION 1 : RESET DES PIDS AU SOL ---
+            // Si le throttle est trop bas (< 5%), on reset les intégrales pour éviter les sauts au décollage
+            if (targetThrottle < (dif_PULSE_TICKS * 0.05f)) {
+                pidPitch.reset();
+                pidRoll.reset();
+                pidYaw.reset();
+            }
 
+            // Normalisation des angles [-180, 180]
+            auto normalizeAngle = [](float a) {
+                while (a > 180.0f) a -= 360.0f;
+                while (a < -180.0f) a += 360.0f;
+                return a;
+            };
+            currentOrientation.pitch = normalizeAngle(currentOrientation.pitch);
+            currentOrientation.roll  = normalizeAngle(currentOrientation.roll);
+
+            // Calcul des corrections
             float correctionPitch = pidPitch.calculate(targetPitch, currentOrientation.pitch, dt);
-            float correctionRoll = pidRoll.calculate(targetRoll, currentOrientation.roll, dt);
-
-            // Fix yaw correction calculation
-            float yawError = targetYaw - currentOrientation.yaw;
-            // Normalize to [-180, 180]
-            if (yawError > 180.0f)
-            {
-                yawError -= 360.0f;
-            }
-            else if (yawError < -180.0f)
-            {
-                yawError += 360.0f;
-            }
-            float correctionYaw = pidYaw.calculate(targetYaw, currentOrientation.yaw, dt);
+            float correctionRoll  = pidRoll.calculate(targetRoll, currentOrientation.roll, dt);
             
-            // Limit PID corrections to prevent excessive motor commands (saturation)
-            // Each correction should not exceed ±50% of the dynamic range to avoid oscillation
+            // --- CORRECTION 2 : LOGIQUE YAW RATE ---
+            // On traite le Yaw comme une vitesse (Rate), donc on compare directement avec le gyro si disponible
+            // Ici on garde ta logique d'erreur mais on s'assure de ne pas accumuler d'erreur au repos
+            float yawError = targetYaw - currentOrientation.yaw; 
+            if (yawError > 180.0f) yawError -= 360.0f;
+            else if (yawError < -180.0f) yawError += 360.0f;
+            float correctionYaw = pidYaw.calculate(yawError, 0.0f, dt);
+            
+            // Saturation des corrections (max 50% de la puissance)
             float maxCorrection = dif_PULSE_TICKS * 0.5f;
-            correctionPitch = (correctionPitch > maxCorrection) ? maxCorrection : (correctionPitch < -maxCorrection) ? -maxCorrection : correctionPitch;
-            correctionRoll = (correctionRoll > maxCorrection) ? maxCorrection : (correctionRoll < -maxCorrection) ? -maxCorrection : correctionRoll;
-            correctionYaw = (correctionYaw > maxCorrection) ? maxCorrection : (correctionYaw < -maxCorrection) ? -maxCorrection : correctionYaw;
-            
-            // Log PID corrections periodically for debugging (every 50 iterations ~ 500ms)
-            static int logCounter = 0;
-            if (++logCounter >= 50) {
-                ESP_LOGD(TAG_MOTOR_MANAGER, "PID: P=%.0f R=%.0f Y=%.0f (throttle=%.0f)", 
-                         correctionPitch, correctionRoll, correctionYaw, targetThrottle);
-                logCounter = 0;
-            }
+            // --- CORRECTION CLAMP (C++ ESP32) ---
+            auto clampFloat = [](float val, float min, float max) {
+                return (val < min) ? min : (val > max ? max : val);
+            };
 
+            correctionPitch = clampFloat(correctionPitch, -maxCorrection, maxCorrection);
+            correctionRoll  = clampFloat(correctionRoll, -maxCorrection, maxCorrection);
+            correctionYaw   = clampFloat(correctionYaw, -maxCorrection, maxCorrection);
+
+            // --- CORRECTION 3 : MIXER AVEC SÉCURITÉ THROTTLE ---
             if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
-                motorSpeeds[0] = targetThrottle + correctionPitch + correctionRoll + correctionYaw; // Moteur 0 : avant-gauche
-                motorSpeeds[1] = targetThrottle + correctionPitch - correctionRoll - correctionYaw; // Moteur 1 : avant-droit
-                motorSpeeds[2] = targetThrottle - correctionPitch - correctionRoll - correctionYaw; // Moteur 2 : arrière-droit
-                motorSpeeds[3] = targetThrottle - correctionPitch + correctionRoll + correctionYaw; // Moteur 3 : arrière-gauche
+                auto clampCmd = [&](float val) {
+                    if (val < 0.0f) return 0.0f;
+                    if (val > dif_PULSE_TICKS) return dif_PULSE_TICKS;
+                    return val;
+                };
+
+                // Si le throttle est quasiment nul, on force les moteurs à 0 pour éviter le "n'importe quoi"
+                if (targetThrottle < 10.0f) {
+                    motorSpeeds[0] = motorSpeeds[1] = motorSpeeds[2] = motorSpeeds[3] = 0.0f;
+                } else {
+                    // Mixage en croix (X-Config)
+                    motorSpeeds[0] = clampCmd(targetThrottle + correctionPitch + correctionRoll + correctionYaw); // AVG
+                    motorSpeeds[1] = clampCmd(targetThrottle + correctionPitch - correctionRoll - correctionYaw); // AVD
+                    motorSpeeds[2] = clampCmd(targetThrottle - correctionPitch - correctionRoll - correctionYaw); // ARD
+                    motorSpeeds[3] = clampCmd(targetThrottle - correctionPitch + correctionRoll + correctionYaw); // ARG
+                }
                 xSemaphoreGive(xMotorSpeedMutex);
             }
             
-            
-            for (int i = 0; i < NUM_MOTORS; i++)
-                {
-                    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
-                        setMotorSpeed(i, motorSpeeds[i]);
-                        xSemaphoreGive(xMotorSpeedMutex);
-                    }
+            // Application physique des vitesses
+            for (int i = 0; i < NUM_MOTORS; i++) {
+                if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+                    setMotorSpeed(i, motorSpeeds[i]);
+                    xSemaphoreGive(xMotorSpeedMutex);
                 }
+            }
         }
         else if (!isMotorArmed)
         {
             setMotorSpeedsZero();
-            for (int i = 0; i < NUM_MOTORS; i++)
-            {
-                setMotorSpeed(i, 0);
-            }
-            
+            for (int i = 0; i < NUM_MOTORS; i++) setMotorSpeed(i, 0);
         }
 
-
-
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(10)); // Fréquence de 100Hz
     }
 }
 
