@@ -229,10 +229,21 @@ void MotorManager::setMotorSpeed(int motorIndex, u_int32_t pulse_ticks)
 
     uint32_t pulse = MIN_PULSE_TICKS + constrain(pulse_ticks, 0, MAX_PULSE_TICKS - MIN_PULSE_TICKS);
 
-    ESP_ERROR_CHECK(
-        mcpwm_comparator_set_compare_value(
-            motorPwmConfigs[motorIndex].comparator,
-            pulse));
+    if(modeHIL){
+        if (usbController) {
+            usbController->setData(motorIndex, pulse);
+        } else {
+            ESP_LOGE(TAG_MOTOR_MANAGER, "HIL mode but usbController is null!");
+        }
+    }
+    else{
+        ESP_ERROR_CHECK(
+            mcpwm_comparator_set_compare_value(
+                motorPwmConfigs[motorIndex].comparator,
+                pulse));
+    }
+
+    
 
     // ESP_LOGI(
     //     TAG_MOTOR_MANAGER,
@@ -240,6 +251,17 @@ void MotorManager::setMotorSpeed(int motorIndex, u_int32_t pulse_ticks)
     //     motorIndex,
     //     pulse,
     //     pulse_ticks);
+}
+
+void MotorManager::setMotorSpeedsZero()
+{
+    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+        motorSpeeds[0] = 0; // Moteur 0 : avant-gauche
+        motorSpeeds[1] = 0; // Moteur 1 : avant-droit
+        motorSpeeds[2] = 0; // Moteur 2 : arrière-droit
+        motorSpeeds[3] = 0; // Moteur 3 : arrière-gauche
+        xSemaphoreGive(xMotorSpeedMutex);
+    }
 }
 
 // Function to handle emergency stop
@@ -250,7 +272,17 @@ void MotorManager::disarmMotors()
     {
         if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
             motorSpeeds[i] = 0;
-            mcpwm_comparator_set_compare_value(motorPwmConfigs[i].comparator, MIN_PULSE_TICKS);
+            if(modeHIL){
+                if (usbController) {
+                    usbController->setData(i, 0);
+                } else {
+                    ESP_LOGE(TAG_MOTOR_MANAGER, "HIL mode but usbController is null!");
+                }
+            }
+            else{
+                mcpwm_comparator_set_compare_value(motorPwmConfigs[i].comparator, MIN_PULSE_TICKS);
+            }
+            
             xSemaphoreGive(xMotorSpeedMutex);
         }
         
@@ -294,12 +326,7 @@ void MotorManager::Task()
         if (EspNowHandler::pingLost) {
             if(isMotorArmed){
                 ESP_LOGW(TAG_MOTOR_MANAGER, "Ping lost - disarming motors for safety");
-                if(modeHIL){
-                    isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
-                }
-                else{
-                    disarmMotors();
-                }
+                disarmMotors();
             }
         }
 
@@ -322,21 +349,11 @@ void MotorManager::Task()
             {
                 if (*controllerRequestDTO.buttonMotorArming)
                 {
-                    if(modeHIL){
-                        isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
-                    }
-                    else{
-                        armMotors();
-                    }
+                    armMotors();
                 }
                 else
                 {
-                    if(modeHIL){
-                        isMotorArmed = false; // Just set the flag to false in HIL mode, without sending PWM signals
-                    }
-                    else{
-                        disarmMotors();
-                    }
+                    disarmMotors();
                 }
             }
 
@@ -398,35 +415,22 @@ void MotorManager::Task()
             }
             
             
-            if (modeHIL) {
-                // send the computed motor speeds back to the host over USB
-                if (usbController) {
-                    if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
-                        usbController->setData(motorSpeeds, NUM_MOTORS);
-                        xSemaphoreGive(xMotorSpeedMutex);
-                    }
-                } else {
-                    ESP_LOGE(TAG_MOTOR_MANAGER, "HIL mode but usbController is null!");
-                }
-            } else {
-                // Set motor speeds with clamping
-                for (int i = 0; i < NUM_MOTORS; i++)
+            for (int i = 0; i < NUM_MOTORS; i++)
                 {
                     if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
                         setMotorSpeed(i, motorSpeeds[i]);
                         xSemaphoreGive(xMotorSpeedMutex);
                     }
-                    
                 }
-            }
         }
         else if (!isMotorArmed)
         {
-            // Explicitly zero motors when disarmed for safety
+            setMotorSpeedsZero();
             for (int i = 0; i < NUM_MOTORS; i++)
             {
                 setMotorSpeed(i, 0);
             }
+            
         }
 
 

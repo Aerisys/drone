@@ -37,6 +37,7 @@ public:
     * @return ESP_OK on success, or an error code on failure.
     */
     void setMotorSpeed(int motorIndex, u_int32_t speed);
+    void setMotorSpeedsZero();
     void disarmMotors();
     void armMotors();
     void Task();

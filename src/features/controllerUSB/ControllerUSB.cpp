@@ -95,15 +95,14 @@ void ControllerUSB::readOrientationPacket()
     }
 }
 
-void ControllerUSB::setData(const float motorSpeeds[], int numMotors)
+void ControllerUSB::setData(int index, uint32_t motorSpeed)
 {
-    // build a single string and write it so output is atomic
-    char buf[128];
-    int off = snprintf(buf, sizeof(buf), "M:");
-    for (int i = 0; i < numMotors; ++i) {
-        off += snprintf(buf + off, sizeof(buf) - off, " %.4f", motorSpeeds[i]);
-    }
-    off += snprintf(buf + off, sizeof(buf) - off, "\n");
+    char buf[20];
+    
+    int off = snprintf(buf, sizeof(buf), "M%d:%u\n", index, (unsigned int)motorSpeed);
+    
+    // Envoi atomique sur l'UART
     uart_write_bytes(UART_NUM, (const char*)buf, off);
+    
     ESP_LOGD(TAG, "Motor TX: %s", buf);
 }

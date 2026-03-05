@@ -47,26 +47,35 @@ On receipt the firmware updates its orientation used by the PID controller.
 
 ### Motor Speeds (ESP32 → host)
 
-After each control loop iteration the firmware writes a line back to the
-host using the format:
+The firmware sends individual motor speed updates to the host. Each packet
+is a single line terminated by `\n` in the form:
 
 ```
-M: <s0> <s1> <s2> <s3>
+M<index>:<speed>
 ```
 
-- `M:` indicates a motor data packet.
-- `s0`..`s3` are floats representing the commanded pulse width offset from
-  `MIN_PULSE_TICKS` (i.e. throttle value).  The host can convert these to
-  forces or RPM as needed.
+- `M` prefix denotes a motor command.
+- `<index>` is the zero-based motor number (0..3 in a quadcopter).
+- `<speed>` is the unsigned integer value written by
+  `ControllerUSB::setData()` (typically the pulse‑width offset from
+  `MIN_PULSE_TICKS`).
 
-Example received by Unity:
+This design lets the host receive the four motor values one at a time, which
+matches the way the firmware updates each motor internally. The host can
+store or convert them to forces/RPM as required.
+
+Example parsing code in Unity:
 
 ```csharp
 string line = serialPort.ReadLine();
-if (line.StartsWith("M:")) {
-    var parts = line.Substring(2).Split(' ');
-    float[] speeds = parts.Select(float.Parse).ToArray();
-    // apply speeds to simulated motors
+if (line.Length > 2 && line[0] == 'M') {
+    // format: M0:12345
+    int colon = line.IndexOf(':');
+    if (colon > 1) {
+        int motorIndex = int.Parse(line.Substring(1, colon-1));
+        float speed = float.Parse(line.Substring(colon+1));
+        motorSpeeds[motorIndex] = speed;
+    }
 }
 ```
 
