@@ -295,6 +295,12 @@ void MotorManager::armMotors()
 {
     isMotorArmed = true;
     ESP_LOGI(TAG_MOTOR_MANAGER, "enable Motor Arming; motors zeroed");
+    
+    // Reset PID controllers to avoid integral windup from previous state
+    pidPitch.reset();
+    pidRoll.reset();
+    pidYaw.reset();
+    
     // Optionally re‑arm ESCs by sending idle pulse for a moment:
     for (int i = 0; i < NUM_MOTORS; i++)
     {
@@ -405,6 +411,21 @@ void MotorManager::Task()
                 yawError += 360.0f;
             }
             float correctionYaw = pidYaw.calculate(targetYaw, currentOrientation.yaw, dt);
+            
+            // Limit PID corrections to prevent excessive motor commands (saturation)
+            // Each correction should not exceed ±50% of the dynamic range to avoid oscillation
+            float maxCorrection = dif_PULSE_TICKS * 0.5f;
+            correctionPitch = (correctionPitch > maxCorrection) ? maxCorrection : (correctionPitch < -maxCorrection) ? -maxCorrection : correctionPitch;
+            correctionRoll = (correctionRoll > maxCorrection) ? maxCorrection : (correctionRoll < -maxCorrection) ? -maxCorrection : correctionRoll;
+            correctionYaw = (correctionYaw > maxCorrection) ? maxCorrection : (correctionYaw < -maxCorrection) ? -maxCorrection : correctionYaw;
+            
+            // Log PID corrections periodically for debugging (every 50 iterations ~ 500ms)
+            static int logCounter = 0;
+            if (++logCounter >= 50) {
+                ESP_LOGD(TAG_MOTOR_MANAGER, "PID: P=%.0f R=%.0f Y=%.0f (throttle=%.0f)", 
+                         correctionPitch, correctionRoll, correctionYaw, targetThrottle);
+                logCounter = 0;
+            }
 
             if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
                 motorSpeeds[0] = targetThrottle + correctionPitch + correctionRoll + correctionYaw; // Moteur 0 : avant-gauche

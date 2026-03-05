@@ -10,3 +10,9 @@ float PidManager::calculate(float setpoint, float measured, float dt)
     previousError = error;
     return kp * error + ki * integral + kd * derivative;
 }
+
+void PidManager::reset()
+{
+    previousError = 0.0f;
+    integral = 0.0f;
+}
