@@ -1,5 +1,6 @@
 #include "features/espNowHandler/EspNowHandler.h"
 #include "features/motorManager/MotorManager.h"
+#include "features/controllerUSB/ControllerUSB.h"
 
 #include "mpu9250.h"
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,13 @@ extern "C" void app_main(void)
     // Initialize ESP-NOW
     espNowHandler = new EspNowHandler();
     imu = new MPU9250();
-    motorManager = new MotorManager();
+    motorManager = new MotorManager(true);
+
+    // prepare USB controller for HIL mode
+    ControllerUSB *usbController = nullptr;
+    if (motorManager->modeHIL) {
+        usbController = new ControllerUSB();
+    }
     if (!espNowHandler->init(imu, motorManager))
     {
         ESP_LOGE(TAG_MAIN, "ESP-NOW init failed!");
@@ -41,23 +48,28 @@ extern "C" void app_main(void)
         //return;
     }
 
-    err = imu->calibrate();
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG_MAIN, "Failed to start calibration");
-        //return;
-    }
+    if(!motorManager->modeHIL){
+        err = imu->calibrate();
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG_MAIN, "Failed to start calibration");
+            //return;
+        }
 
-    err = imu->startSensorTask();
-    if (err != ESP_OK)
-    {
-        ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
-        return;
+        err = imu->startSensorTask();
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG_MAIN, "Failed to start sensor task");
+            return;
+        }
     }
+    
+
+    
 
 
     // Initialize ESP-NOW handlers
-    if (!motorManager->init(imu))
+    if (!motorManager->init(imu, usbController))
     {
         ESP_LOGE("MAIN", "MotorManager init failed!");
         return;

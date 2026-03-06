@@ -20,9 +20,15 @@
 class MotorManager
 {
 public:
-    MotorManager();
+
+    bool modeHIL;
+
+    MotorManager(bool modeHIL = false);
     ~MotorManager();
-    bool init(MPU9250 *imu);
+    // In normal mode, imu must be provided.  In HIL mode, imu may be null
+    // and a ControllerUSB instance must be passed instead so that orientation
+    // can be read from the host.
+    bool init(MPU9250 *imu, class ControllerUSB *usb = nullptr);
 
     /*
     * @brief Set the speed of a motor.
@@ -31,6 +37,7 @@ public:
     * @return ESP_OK on success, or an error code on failure.
     */
     void setMotorSpeed(int motorIndex, u_int32_t speed);
+    void setMotorSpeedsZero();
     void disarmMotors();
     void armMotors();
     void Task();
@@ -63,7 +70,7 @@ private:
     static constexpr uint32_t PERIOD_TICKS = TIMER_RESOLUTION_HZ / PWM_FREQ_HZ; // 20000 ticks for 20ms period
     static constexpr uint32_t MIN_PULSE_TICKS = 1000;                           // 1000µs pulse width (idle)
     static constexpr uint32_t MAX_PULSE_TICKS = 2000;                           // 2000µs pulse width (full throttle)
-    static constexpr uint32_t MAX_ANGLE = 30; // Maximum angle for roll and pitch in degrees
+    static constexpr uint32_t MAX_ANGLE = 60; // Maximum angle for roll and pitch in degrees
     static constexpr uint32_t MAX_YAW_RATE = 45; // Maximum yaw rate in degrees per second
 
     static constexpr float pkp = 4.8f;  // Proportional gain
@@ -84,6 +91,9 @@ private:
     PidManager pidYaw{yawkp, yawki, yawkd};  // PID controller for roll
 
     MPU9250 *imu;
+    // when running in HIL mode the orientation is fetched from usbController
+    // and motor outputs are forwarded through it as well.
+    class ControllerUSB *usbController = nullptr;
 };
 
 #endif
