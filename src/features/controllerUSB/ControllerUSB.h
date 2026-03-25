@@ -30,7 +30,7 @@ public:
      * @param baudRate Serial baud rate, default 115200.
      * @return true if initialisation looks ok (always true currently).
      */
-    bool init(uint32_t baudRate = 115200);
+    bool init(uint32_t baudRate = 921600);
 
     /**
      * @brief Return the most recently received orientation vector.
