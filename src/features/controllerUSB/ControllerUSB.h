@@ -49,6 +49,26 @@ public:
      */
     void setData(int index, uint32_t motorSpeed);
 
+    /**
+     * @brief Send one-line control telemetry for host-side debugging/plotting.
+     *
+    * Format:
+    * T:sp=<..> sr=<..> sy=<..> st=<..> tp=<..> tr=<..> ty=<..> mcp=<..> mcr=<..> mcy=<..> or=<..> op=<..> oy=<..>\n
+     */
+    void sendTelemetry(float stickPitch,
+                       float stickRoll,
+                       float stickYaw,
+                       float stickThrottle,
+                       float targetPitchAngle,
+                       float targetRollAngle,
+                       float targetYawRate,
+                       float motorCorrectionPitch,
+                       float motorCorrectionRoll,
+                       float motorCorrectionYaw,
+                       float orientationRoll,
+                       float orientationPitch,
+                       float orientationYaw);
+
 private:
     // read a line from UART0 into the provided buffer, returns true if a
     // complete line (terminated by '\n') was received.

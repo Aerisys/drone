@@ -296,27 +296,50 @@ void MotorManager::armMotors()
     isMotorArmed = true;
     ESP_LOGI(TAG_MOTOR_MANAGER, "enable Motor Arming; motors zeroed");
     
-    // Reset PID controllers to avoid integral windup from previous state
-    pidPitch.reset();
-    pidRoll.reset();
-    pidYaw.reset();
+    // Reset ALL PID controllers (inner + outer) to avoid integral windup
+    pidAnglePitch.reset();
+    pidAngleRoll.reset();
+    pidAngleYaw.reset();
+    pidRatePitch.reset();
+    pidRateRoll.reset();
+    pidRateYaw.reset();
     
-    // Optionally re‑arm ESCs by sending idle pulse for a moment:
+    // Send idle pulse to ESCs
     for (int i = 0; i < NUM_MOTORS; i++)
     {
         setMotorSpeed(i, 0);
     }
-    vTaskDelay(pdMS_TO_TICKS(500));
 }
 
-// Function call to start the task
+// ==================== HELPER FUNCTIONS ====================
+
+float MotorManager::normalizeAngle(float angle)
+{
+    while (angle > 180.0f) angle -= 360.0f;
+    while (angle < -180.0f) angle += 360.0f;
+    return angle;
+}
+
+float MotorManager::clampValue(float value, float minVal, float maxVal)
+{
+    if (value < minVal) return minVal;
+    if (value > maxVal) return maxVal;
+    return value;
+}
+
+float MotorManager::clampRateOutput(float value)
+{
+    return clampValue(value, -PULSE_RANGE * 0.5f, PULSE_RANGE * 0.5f);
+}
+
+// ==================== CONTROL LOOP (100Hz) ====================
 void MotorManager::Task()
 {
     ControllerRequestDTO lastControllerRequestDTO;
     MPU9250::Orientation currentOrientation;
     int64_t lastTime = esp_timer_get_time();
 
-    float dif_PULSE_TICKS = MAX_PULSE_TICKS - MIN_PULSE_TICKS;
+    ESP_LOGI(TAG_MOTOR_MANAGER, "[%lu ms] MotorManager Task running...", esp_log_timestamp());
 
     if(modeHIL){
         lastControllerRequestDTO.flightController = new FlightController();
@@ -324,16 +347,14 @@ void MotorManager::Task()
 
     while (true)
     {
-        // ... (Ping lost et logs de démarrage identiques) ...
-
-        // 1. Récupération de l'orientation
+        // ===== STEP 1: READ SENSORS =====
         if (modeHIL) {
-            if (usbController) currentOrientation = usbController->getOrientation();
+            if (usbController) currentOrientation = usbController->getOrientation();            
         } else {
             currentOrientation = imu->getOrientation();
         }
-        
-        // 2. Mise à jour de la requête contrôleur (Stick inputs)
+
+        // ===== STEP 2: UPDATE CONTROLLER COMMANDS =====
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
         {
             if (currentControllerRequestDTO.buttonMotorArming != nullptr)
@@ -348,80 +369,137 @@ void MotorManager::Task()
             xSemaphoreGive(xControllerRequestMutex);
         }
 
+        // ===== STEP 3: CONTROL LOOP (only if armed) =====
         if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
         {
             int64_t now = esp_timer_get_time();
             float dt = (now - lastTime) * 1e-6f;
             lastTime = now;
 
-            // Mapping des sticks vers les cibles physiques
-            float targetPitch = lastControllerRequestDTO.flightController->pitch * MAX_ANGLE;
-            float targetRoll  = lastControllerRequestDTO.flightController->roll  * MAX_ANGLE;
-            float targetYaw   = lastControllerRequestDTO.flightController->yaw   * MAX_YAW_RATE;
-            float targetThrottle = lastControllerRequestDTO.flightController->throttle * dif_PULSE_TICKS;
+            // Clamp dt to prevent derivative spikes from timing jitter
+            dt = clampValue(dt, DT_MIN, DT_MAX);
 
-            // --- CORRECTION 1 : RESET DES PIDS AU SOL ---
-            // Si le throttle est trop bas (< 5%), on reset les intégrales pour éviter les sauts au décollage
-            if (targetThrottle < (dif_PULSE_TICKS * 0.05f)) {
-                pidPitch.reset();
-                pidRoll.reset();
-                pidYaw.reset();
+            // ===== 3.1: PARSE STICK INPUTS =====
+            float stickPitch = lastControllerRequestDTO.flightController->pitch;      // [-1..+1]
+            float stickRoll  = lastControllerRequestDTO.flightController->roll;       // [-1..+1]
+            float stickYaw   = lastControllerRequestDTO.flightController->yaw;        // [-1..+1]
+            float stickThrottle = lastControllerRequestDTO.flightController->throttle; // [0..+1]
+
+            // Clamp angle setpoints
+            float targetPitchAngle = clampValue(stickPitch * MAX_PITCH_ANGLE_DEG, -MAX_PITCH_ANGLE_DEG, MAX_PITCH_ANGLE_DEG);
+            float targetRollAngle  = clampValue(stickRoll  * MAX_ROLL_ANGLE_DEG,  -MAX_ROLL_ANGLE_DEG,  MAX_ROLL_ANGLE_DEG);
+            float targetYawRate    = clampValue(stickYaw   * MAX_YAW_RATE_DEG_S,   -MAX_YAW_RATE_DEG_S,   MAX_YAW_RATE_DEG_S);
+
+            // Throttle (0 to PULSE_RANGE)
+            float throttleOutput = stickThrottle * PULSE_RANGE;
+
+            // ===== 3.2: SAFETY CHECKS =====
+            // Low throttle = reset PIDs to avoid integral windup
+            if (stickThrottle < THROTTLE_DEADZONE) {
+                pidAnglePitch.reset();
+                pidAngleRoll.reset();
+                pidAngleYaw.reset();
+                pidRatePitch.reset();
+                pidRateRoll.reset();
+                pidRateYaw.reset();
+                throttleOutput = 0.0f;
             }
 
-            // Normalisation des angles [-180, 180]
-            auto normalizeAngle = [](float a) {
-                while (a > 180.0f) a -= 360.0f;
-                while (a < -180.0f) a += 360.0f;
-                return a;
-            };
+            // Reserve thrust margin for attitude corrections
+            float usableThrottle = throttleOutput * (1.0f - THRUST_HEADROOM_RATIO);
+            float thrustHeadroom = PULSE_RANGE * THRUST_HEADROOM_RATIO;
+
+            // ===== 3.3: NORMALIZE ANGLES & GET RATES =====
             currentOrientation.pitch = normalizeAngle(currentOrientation.pitch);
             currentOrientation.roll  = normalizeAngle(currentOrientation.roll);
+            currentOrientation.yaw   = normalizeAngle(currentOrientation.yaw);
 
-            // Calcul des corrections
-            float correctionPitch = pidPitch.calculate(targetPitch, currentOrientation.pitch, dt);
-            float correctionRoll  = pidRoll.calculate(targetRoll, currentOrientation.roll, dt);
+            // Estimate gyro rates via angle differentiation
+            // This avoids needing direct gyro access and works in both real/HIL modes
+            float angleDiffPitch = normalizeAngle(currentOrientation.pitch - prevPitch);
+            float angleDiffRoll  = normalizeAngle(currentOrientation.roll - prevRoll);
+            float angleDiffYaw   = normalizeAngle(currentOrientation.yaw - prevYaw);
+
+            float gyroPitchRate = (dt > 0.0f) ? angleDiffPitch / dt : 0.0f;  // deg/s
+            float gyroRollRate  = (dt > 0.0f) ? angleDiffRoll / dt : 0.0f;
+            float gyroYawRate   = (dt > 0.0f) ? angleDiffYaw / dt : 0.0f;
+
+            // Store current angles for next iteration
+            prevPitch = currentOrientation.pitch;
+            prevRoll = currentOrientation.roll;
+            prevYaw = currentOrientation.yaw;
+
+            // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
+            // Converts (stick_angle_target - measured_angle) → rate_target
             
-            // --- CORRECTION 2 : LOGIQUE YAW RATE ---
-            // On traite le Yaw comme une vitesse (Rate), donc on compare directement avec le gyro si disponible
-            // Ici on garde ta logique d'erreur mais on s'assure de ne pas accumuler d'erreur au repos
-            float yawError = targetYaw - currentOrientation.yaw; 
-            if (yawError > 180.0f) yawError -= 360.0f;
-            else if (yawError < -180.0f) yawError += 360.0f;
-            float correctionYaw = pidYaw.calculate(yawError, 0.0f, dt);
+            // Outer PIDs output: desired rate setpoints
+            float desiredPitchRate = pidAnglePitch.calculate(targetPitchAngle, currentOrientation.pitch, dt);
+            float desiredRollRate  = pidAngleRoll.calculate(targetRollAngle, currentOrientation.roll, dt);
             
-            // Saturation des corrections (max 50% de la puissance)
-            float maxCorrection = dif_PULSE_TICKS * 0.5f;
-            // --- CORRECTION CLAMP (C++ ESP32) ---
-            auto clampFloat = [](float val, float min, float max) {
-                return (val < min) ? min : (val > max ? max : val);
-            };
+            // Yaw: direct rate from stick (simpler, no angle feedback)
+            float desiredYawRate = stickYaw * MAX_YAW_RATE_DEG_S;
 
-            correctionPitch = clampFloat(correctionPitch, -maxCorrection, maxCorrection);
-            correctionRoll  = clampFloat(correctionRoll, -maxCorrection, maxCorrection);
-            correctionYaw   = clampFloat(correctionYaw, -maxCorrection, maxCorrection);
+            // Clamp rate targets
+            desiredPitchRate = clampValue(desiredPitchRate, -MAX_PITCH_RATE_DEG_S, MAX_PITCH_RATE_DEG_S);
+            desiredRollRate  = clampValue(desiredRollRate, -MAX_ROLL_RATE_DEG_S, MAX_ROLL_RATE_DEG_S);
+            desiredYawRate   = clampValue(desiredYawRate, -MAX_YAW_RATE_DEG_S, MAX_YAW_RATE_DEG_S);
 
-            // --- CORRECTION 3 : MIXER AVEC SÉCURITÉ THROTTLE ---
-            if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
-                auto clampCmd = [&](float val) {
+            // ===== 3.5: INNER LOOP - RATE TO MOTOR CORRECTIONS =====
+            // Converts (desired_rate - measured_rate) → motor_correction
+            float motorCorrectionPitch = pidRatePitch.calculate(desiredPitchRate, gyroPitchRate, dt);
+            float motorCorrectionRoll  = pidRateRoll.calculate(desiredRollRate, gyroRollRate, dt);
+            float motorCorrectionYaw   = pidRateYaw.calculate(desiredYawRate, gyroYawRate, dt);
+
+            // Clamp motor corrections to reserved thrust headroom
+            motorCorrectionPitch = clampValue(motorCorrectionPitch, -thrustHeadroom, thrustHeadroom);
+            motorCorrectionRoll  = clampValue(motorCorrectionRoll, -thrustHeadroom, thrustHeadroom);
+            motorCorrectionYaw   = clampValue(motorCorrectionYaw, -thrustHeadroom, thrustHeadroom);
+
+            // Send compact one-line telemetry to Unity at 20Hz (every 5 control loops).
+            if (modeHIL && usbController) {
+                usbController->sendTelemetry(stickPitch,
+                                             stickRoll,
+                                             stickYaw,
+                                             stickThrottle,
+                                             targetPitchAngle,
+                                             targetRollAngle,
+                                             targetYawRate,
+                                             motorCorrectionPitch,
+                                             motorCorrectionRoll,
+                                             motorCorrectionYaw,
+                                             currentOrientation.roll,
+                                             currentOrientation.pitch,
+                                             currentOrientation.yaw);
+            }
+
+            // ===== 3.6: MOTOR MIXER (X-Config) =====
+            // Apply motor corrections to throttle setpoint
+            // M0 (Front-Left):    T - pitch + roll + yaw
+            // M1 (Front-Right):   T - pitch - roll - yaw
+            // M2 (Rear-Right):    T + pitch - roll - yaw
+            // M3 (Rear-Left):     T + pitch + roll + yaw
+
+            if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE)
+            {
+                auto clampMotor = [](float val) -> float {
                     if (val < 0.0f) return 0.0f;
-                    if (val > dif_PULSE_TICKS) return dif_PULSE_TICKS;
+                    if (val > (float)PULSE_RANGE) return (float)PULSE_RANGE;
                     return val;
                 };
 
-                // Si le throttle est quasiment nul, on force les moteurs à 0 pour éviter le "n'importe quoi"
-                if (targetThrottle < 10.0f) {
+                // Force zero if throttle too low
+                if (usableThrottle < 5.0f) {
                     motorSpeeds[0] = motorSpeeds[1] = motorSpeeds[2] = motorSpeeds[3] = 0.0f;
                 } else {
-                    // Mixage en croix (X-Config)
-                    motorSpeeds[0] = clampCmd(targetThrottle + correctionPitch + correctionRoll + correctionYaw); // AVG
-                    motorSpeeds[1] = clampCmd(targetThrottle + correctionPitch - correctionRoll - correctionYaw); // AVD
-                    motorSpeeds[2] = clampCmd(targetThrottle - correctionPitch - correctionRoll - correctionYaw); // ARD
-                    motorSpeeds[3] = clampCmd(targetThrottle - correctionPitch + correctionRoll + correctionYaw); // ARG
+                    motorSpeeds[0] = clampMotor(usableThrottle - motorCorrectionPitch + motorCorrectionRoll + motorCorrectionYaw);
+                    motorSpeeds[1] = clampMotor(usableThrottle - motorCorrectionPitch - motorCorrectionRoll - motorCorrectionYaw);
+                    motorSpeeds[2] = clampMotor(usableThrottle + motorCorrectionPitch - motorCorrectionRoll - motorCorrectionYaw);
+                    motorSpeeds[3] = clampMotor(usableThrottle + motorCorrectionPitch + motorCorrectionRoll + motorCorrectionYaw);
                 }
                 xSemaphoreGive(xMotorSpeedMutex);
             }
-            
-            // Application physique des vitesses
+
+            // ===== 3.7: SEND TO ESCs =====
             for (int i = 0; i < NUM_MOTORS; i++) {
                 if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
                     setMotorSpeed(i, motorSpeeds[i]);
@@ -435,7 +513,7 @@ void MotorManager::Task()
             for (int i = 0; i < NUM_MOTORS; i++) setMotorSpeed(i, 0);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // Fréquence de 100Hz
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz loop
     }
 }
 
