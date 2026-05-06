@@ -117,6 +117,7 @@ private:
     static constexpr float DT_MIN = 0.005f;   // Minimum dt (5ms) - prevents derivative spikes
     static constexpr float DT_MAX = 0.02f;    // Maximum dt (20ms) - detects timing overruns
     static constexpr float THROTTLE_DEADZONE = 0.02f;  // % of range - disarm if below this
+    static constexpr float MAX_SETPOINT_SLEW_RATE_DEG_S = 200.0f; // max °/s for setpoint ramp
 
     // ==================== STATE ====================
     float motorSpeeds[NUM_MOTORS] = {0};
@@ -140,6 +141,10 @@ private:
     float prevPitch = 0.0f;
     float prevRoll = 0.0f;
     float prevYaw = 0.0f;
+
+    // Previous smoothed setpoints for slew-rate limiting
+    float prevTargetPitch = 0.0f;
+    float prevTargetRoll  = 0.0f;
 
     // ==================== HELPER FUNCTIONS ====================
     float normalizeAngle(float angle);

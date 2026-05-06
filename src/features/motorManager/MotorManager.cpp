@@ -390,6 +390,14 @@ void MotorManager::Task()
             float targetRollAngle  = clampValue(stickRoll  * MAX_ROLL_ANGLE_DEG,  -MAX_ROLL_ANGLE_DEG,  MAX_ROLL_ANGLE_DEG);
             float targetYawRate    = clampValue(stickYaw   * MAX_YAW_RATE_DEG_S,   -MAX_YAW_RATE_DEG_S,   MAX_YAW_RATE_DEG_S);
 
+            // Slew-rate limit: setpoint cannot jump faster than MAX_SETPOINT_SLEW_RATE_DEG_S
+            // Prevents brutal stick inputs from demanding a step change the drone cannot follow
+            float slewLimit    = MAX_SETPOINT_SLEW_RATE_DEG_S * dt;
+            targetPitchAngle   = prevTargetPitch + clampValue(targetPitchAngle - prevTargetPitch, -slewLimit, slewLimit);
+            targetRollAngle    = prevTargetRoll  + clampValue(targetRollAngle  - prevTargetRoll,  -slewLimit, slewLimit);
+            prevTargetPitch    = targetPitchAngle;
+            prevTargetRoll     = targetRollAngle;
+
             // Throttle (0 to PULSE_RANGE)
             float throttleOutput = stickThrottle * PULSE_RANGE;
 
@@ -402,6 +410,8 @@ void MotorManager::Task()
                 pidRatePitch.reset();
                 pidRateRoll.reset();
                 pidRateYaw.reset();
+                prevTargetPitch = 0.0f;
+                prevTargetRoll  = 0.0f;
                 throttleOutput = 0.0f;
             }
 
