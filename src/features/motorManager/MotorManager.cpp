@@ -16,7 +16,6 @@ MotorManager::MotorManager(bool modeHIL)
 {
     this->modeHIL = modeHIL;
     xMotorSpeedMutex = xSemaphoreCreateMutex();
-
     if(this->modeHIL){
         return;
     }
@@ -43,7 +42,7 @@ bool MotorManager::init(MPU9250 *imu, ControllerUSB *usb)
     // in HIL mode we rely on the USB controller for orientation and motor
     // output.  the caller has responsibility to pass a valid pointer.
     if (this->modeHIL) {
-        isMotorArmed = true;
+        // isMotorArmed = true;
         usbController = usb;
         if (usbController) {
             usbController->init();
@@ -203,8 +202,9 @@ bool MotorManager::init(MPU9250 *imu, ControllerUSB *usb)
     }
 
     // Send initial idle signal to arm ESCs
-    armMotors();
     vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // armMotors();
 
     ESP_LOGI(TAG_MOTOR_MANAGER, "Initialization complete");
     return true;
@@ -376,6 +376,10 @@ void MotorManager::Task()
                     }
                     prevArmingState = newState;
                 }
+            }
+            if (currentControllerRequestDTO.buttonMotorState != nullptr)
+            {
+                disarmMotors();
             }
             if (currentControllerRequestDTO.flightController != nullptr)
             {
