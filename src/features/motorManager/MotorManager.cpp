@@ -366,16 +366,14 @@ void MotorManager::Task()
         {
             if (currentControllerRequestDTO.buttonMotorArming != nullptr)
             {
-                bool newState = *currentControllerRequestDTO.buttonMotorArming;
-                if (newState != prevArmingState) {
-                    if (newState) {
-                        armMotors();
-                        if (modeHIL && usbController) usbController->clearEmergencyStop();
-                    } else {
-                        disarmMotors();
-                    }
-                    prevArmingState = newState;
+                currentControllerRequestDTO.buttonMotorArming = nullptr;
+                if (!prevArmingState) {
+                    armMotors();
+                    if (modeHIL && usbController) usbController->clearEmergencyStop();
+                } else {
+                    disarmMotors();
                 }
+                prevArmingState = !prevArmingState;
             }
             if (currentControllerRequestDTO.buttonMotorState != nullptr)
             {
