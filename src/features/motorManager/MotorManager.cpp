@@ -385,18 +385,28 @@ void MotorManager::Task()
             float stickYaw   = lastControllerRequestDTO.flightController->yaw;        // [-1..+1]
             float stickThrottle = lastControllerRequestDTO.flightController->throttle; // [0..+1]
 
-            // Clamp angle setpoints
-            float targetPitchAngle = clampValue(stickPitch * MAX_PITCH_ANGLE_DEG, -MAX_PITCH_ANGLE_DEG, MAX_PITCH_ANGLE_DEG);
-            float targetRollAngle  = clampValue(stickRoll  * MAX_ROLL_ANGLE_DEG,  -MAX_ROLL_ANGLE_DEG,  MAX_ROLL_ANGLE_DEG);
-            float targetYawRate    = clampValue(stickYaw   * MAX_YAW_RATE_DEG_S,   -MAX_YAW_RATE_DEG_S,   MAX_YAW_RATE_DEG_S);
+            // Raw setpoints from stick
+            float targetPitchAngle = stickPitch * MAX_PITCH_ANGLE_DEG;
+            float targetRollAngle  = stickRoll  * MAX_ROLL_ANGLE_DEG;
+            float targetYawRate    = clampValue(stickYaw * MAX_YAW_RATE_DEG_S, -MAX_YAW_RATE_DEG_S, MAX_YAW_RATE_DEG_S);
 
             // Slew-rate limit: setpoint cannot jump faster than MAX_SETPOINT_SLEW_RATE_DEG_S
             // Prevents brutal stick inputs from demanding a step change the drone cannot follow
-            float slewLimit    = MAX_SETPOINT_SLEW_RATE_DEG_S * dt;
-            targetPitchAngle   = prevTargetPitch + clampValue(targetPitchAngle - prevTargetPitch, -slewLimit, slewLimit);
-            targetRollAngle    = prevTargetRoll  + clampValue(targetRollAngle  - prevTargetRoll,  -slewLimit, slewLimit);
-            prevTargetPitch    = targetPitchAngle;
-            prevTargetRoll     = targetRollAngle;
+            float slewLimit  = MAX_SETPOINT_SLEW_RATE_DEG_S * dt;
+            targetPitchAngle = prevTargetPitch + clampValue(targetPitchAngle - prevTargetPitch, -slewLimit, slewLimit);
+            targetRollAngle  = prevTargetRoll  + clampValue(targetRollAngle  - prevTargetRoll,  -slewLimit, slewLimit);
+
+            // Vector magnitude clamp: combined tilt (pitch²+roll²) cannot exceed MAX_PITCH_ANGLE_DEG.
+            // Per-axis clamping alone allows √2×45° ≈ 63° when both axes are at maximum (e.g. circle input).
+            float combinedTilt = sqrtf(targetPitchAngle * targetPitchAngle + targetRollAngle * targetRollAngle);
+            if (combinedTilt > MAX_PITCH_ANGLE_DEG) {
+                float scale    = MAX_PITCH_ANGLE_DEG / combinedTilt;
+                targetPitchAngle *= scale;
+                targetRollAngle  *= scale;
+            }
+
+            prevTargetPitch = targetPitchAngle;
+            prevTargetRoll  = targetRollAngle;
 
             // Throttle (0 to PULSE_RANGE)
             float throttleOutput = stickThrottle * PULSE_RANGE;
@@ -470,8 +480,9 @@ void MotorManager::Task()
             // Zeroing throttle AND all corrections forces the mixer to output
             // exactly 0 on every motor — asymmetric corrections alone would
             // otherwise keep feeding the rotation.
-            if (fabsf(currentOrientation.pitch) > MAX_PITCH_ANGLE_DEG
-                || fabsf(currentOrientation.roll) > MAX_ROLL_ANGLE_DEG) {
+            float physicalTilt = sqrtf(currentOrientation.pitch * currentOrientation.pitch
+                                     + currentOrientation.roll  * currentOrientation.roll);
+            if (physicalTilt > MAX_PITCH_ANGLE_DEG) {
                 usableThrottle       = 0.0f;
                 motorCorrectionPitch = 0.0f;
                 motorCorrectionRoll  = 0.0f;
