@@ -88,9 +88,10 @@ void ControllerUSB::readOrientationPacket()
             float p, r, y;
             int matched = sscanf(line + 2, "%f %f %f", &p, &r, &y);
             if (matched == 3) {
-                _orientation.pitch = p;
-                _orientation.roll = r;
-                _orientation.yaw = y;
+                // Unity sends roll first, pitch second — swap to match drone frame
+                _orientation.roll  = p;
+                _orientation.pitch = r;
+                _orientation.yaw   = y;
             } else {
                 ESP_LOGV(TAG, "Failed to parse orientation from: %s", line);
             }

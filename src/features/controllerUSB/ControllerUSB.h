@@ -13,8 +13,8 @@
  * it simplifies wiring on typical development boards. The protocol is text-based:
  *
  *   - Orientation updates are received from the host as lines starting with
- *     "O:" followed by three floats (pitch roll yaw) separated by spaces.
- *     Example: "O: 1.23 -4.56 78.9\n".
+ *     "O:" followed by three floats (roll pitch yaw) separated by spaces.
+ *     Example: "O: -4.56 1.23 78.9\n". Note: Unity sends roll before pitch.
  *   - Motor commands are sent to the host one motor at a time using a
  *     line of the form "M<index>:<speed>\n".  `<index>` is the motor number
  *     (0–3) and `<speed>` is an unsigned integer value.  The host can collect
