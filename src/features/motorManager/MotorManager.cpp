@@ -429,19 +429,6 @@ void MotorManager::Task()
             prevRoll = currentOrientation.roll;
             prevYaw = currentOrientation.yaw;
 
-            // ===== 3.3b: ANGLE SAFETY LIMIT =====
-            // If the physical tilt exceeds the allowed range, cut throttle and
-            // clear integral windup. The PID corrections are still computed so
-            // the drone passively tries to level itself while descending.
-            if (fabsf(currentOrientation.pitch) > MAX_PITCH_ANGLE_DEG
-                || fabsf(currentOrientation.roll) > MAX_ROLL_ANGLE_DEG) {
-                usableThrottle = 0.0f;
-                pidAnglePitch.reset();
-                pidAngleRoll.reset();
-                pidRatePitch.reset();
-                pidRateRoll.reset();
-            }
-
             // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
             // Converts (stick_angle_target - measured_angle) → rate_target
             
@@ -467,6 +454,23 @@ void MotorManager::Task()
             motorCorrectionPitch = clampValue(motorCorrectionPitch, -thrustHeadroom, thrustHeadroom);
             motorCorrectionRoll  = clampValue(motorCorrectionRoll, -thrustHeadroom, thrustHeadroom);
             motorCorrectionYaw   = clampValue(motorCorrectionYaw, -thrustHeadroom, thrustHeadroom);
+
+            // ===== 3.5b: ANGLE SAFETY LIMIT =====
+            // Hard cut when physical tilt exceeds the allowed range.
+            // Zeroing throttle AND all corrections forces the mixer to output
+            // exactly 0 on every motor — asymmetric corrections alone would
+            // otherwise keep feeding the rotation.
+            if (fabsf(currentOrientation.pitch) > MAX_PITCH_ANGLE_DEG
+                || fabsf(currentOrientation.roll) > MAX_ROLL_ANGLE_DEG) {
+                usableThrottle       = 0.0f;
+                motorCorrectionPitch = 0.0f;
+                motorCorrectionRoll  = 0.0f;
+                motorCorrectionYaw   = 0.0f;
+                pidAnglePitch.reset();
+                pidAngleRoll.reset();
+                pidRatePitch.reset();
+                pidRateRoll.reset();
+            }
 
             // Send compact one-line telemetry to Unity at 20Hz (every 5 control loops).
             if (modeHIL && usbController) {
