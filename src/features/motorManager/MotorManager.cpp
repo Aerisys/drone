@@ -429,6 +429,19 @@ void MotorManager::Task()
             prevRoll = currentOrientation.roll;
             prevYaw = currentOrientation.yaw;
 
+            // ===== 3.3b: ANGLE SAFETY LIMIT =====
+            // If the physical tilt exceeds the allowed range, cut throttle and
+            // clear integral windup. The PID corrections are still computed so
+            // the drone passively tries to level itself while descending.
+            if (fabsf(currentOrientation.pitch) > MAX_PITCH_ANGLE_DEG
+                || fabsf(currentOrientation.roll) > MAX_ROLL_ANGLE_DEG) {
+                usableThrottle = 0.0f;
+                pidAnglePitch.reset();
+                pidAngleRoll.reset();
+                pidRatePitch.reset();
+                pidRateRoll.reset();
+            }
+
             // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
             // Converts (stick_angle_target - measured_angle) → rate_target
             
