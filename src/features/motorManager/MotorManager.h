@@ -146,6 +146,9 @@ private:
     float prevTargetPitch = 0.0f;
     float prevTargetRoll  = 0.0f;
 
+    // Last known arming button state — edge detection to avoid calling arm/disarm every tick
+    bool prevArmingState = true;
+
     // ==================== HELPER FUNCTIONS ====================
     float normalizeAngle(float angle);
     float clampValue(float value, float minVal, float maxVal);

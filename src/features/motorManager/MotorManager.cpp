@@ -355,12 +355,27 @@ void MotorManager::Task()
         }
 
         // ===== STEP 2: UPDATE CONTROLLER COMMANDS =====
+        // HIL emergency stop via serial (Unity sends "STOP\n" / "ARM\n")
+        if (modeHIL && usbController) {
+            if (usbController->isEmergencyStop()) {
+                disarmMotors();
+            }
+        }
+
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
         {
             if (currentControllerRequestDTO.buttonMotorArming != nullptr)
             {
-                if (*currentControllerRequestDTO.buttonMotorArming) armMotors();
-                else disarmMotors();
+                bool newState = *currentControllerRequestDTO.buttonMotorArming;
+                if (newState != prevArmingState) {
+                    if (newState) {
+                        armMotors();
+                        if (modeHIL && usbController) usbController->clearEmergencyStop();
+                    } else {
+                        disarmMotors();
+                    }
+                    prevArmingState = newState;
+                }
             }
             if (currentControllerRequestDTO.flightController != nullptr)
             {

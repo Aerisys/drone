@@ -15,6 +15,8 @@
  *   - Orientation updates are received from the host as lines starting with
  *     "O:" followed by three floats (roll pitch yaw) separated by spaces.
  *     Example: "O: -4.56 1.23 78.9\n". Note: Unity sends roll before pitch.
+ *   - "STOP\n" immediately triggers an emergency stop (latched until "ARM\n").
+ *   - "ARM\n"  clears the emergency stop flag and allows motors to run again.
  *   - Motor commands are sent to the host one motor at a time using a
  *     line of the form "M<index>:<speed>\n".  `<index>` is the motor number
  *     (0–3) and `<speed>` is an unsigned integer value.  The host can collect
@@ -39,6 +41,10 @@ public:
      * the host so the returned value is always up-to-date.
      */
     MPU9250::Orientation getOrientation();
+
+    /** True if Unity sent "STOP\n" and "ARM\n" has not yet been received. */
+    bool isEmergencyStop() const { return _emergencyStop; }
+    void clearEmergencyStop()     { _emergencyStop = false; }
 
     /**
      * @brief Send the current motor speeds to the host.
@@ -81,4 +87,5 @@ private:
     void readOrientationPacket();
 
     MPU9250::Orientation _orientation;
+    bool _emergencyStop = false;
 };

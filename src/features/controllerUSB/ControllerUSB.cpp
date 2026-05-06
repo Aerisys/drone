@@ -95,6 +95,12 @@ void ControllerUSB::readOrientationPacket()
             } else {
                 ESP_LOGV(TAG, "Failed to parse orientation from: %s", line);
             }
+        } else if (strncmp(line, "STOP", 4) == 0) {
+            _emergencyStop = true;
+            ESP_LOGW(TAG, "Emergency stop received from host");
+        } else if (strncmp(line, "ARM", 3) == 0) {
+            _emergencyStop = false;
+            ESP_LOGI(TAG, "Arm command received from host");
         }
     }
 }
