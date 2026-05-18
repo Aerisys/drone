@@ -1,10 +1,8 @@
 #ifndef MOTOR_MANAGER_H
 #define MOTOR_MANAGER_H
 
-
 #include "driver/mcpwm_prelude.h"
 #include "driver/gpio.h"
-
 #include "features/PidManager/PidManager.h"
 #include <ControllerRequestDTO.h>
 #include "esp_log.h"
@@ -16,26 +14,30 @@
 
 #define NUM_MOTORS 4
 #define TAG_MOTOR_MANAGER "MotorManager"
+#define CONTROL_LOOP_HZ 100
+#define CONTROL_LOOP_DT (1.0f / CONTROL_LOOP_HZ)
 
+/**
+ * @class MotorManager
+ * @brief Cascaded PID flight stabilization controller
+ * 
+ * Architecture:
+ *   - Outer Loop (Angle): PID(angle_error) → rate_target
+ *   - Inner Loop (Rate):  PID(rate_error)   → motor_corrections
+ *   - Motor Mixer (X-Config): Apply corrections to throttle
+ * 
+ * This ensures fast gyro feedback stabilization while smooth angle tracking.
+ */
 class MotorManager
 {
 public:
-
     bool modeHIL;
 
     MotorManager(bool modeHIL = false);
     ~MotorManager();
-    // In normal mode, imu must be provided.  In HIL mode, imu may be null
-    // and a ControllerUSB instance must be passed instead so that orientation
-    // can be read from the host.
+
     bool init(MPU9250 *imu, class ControllerUSB *usb = nullptr);
 
-    /*
-    * @brief Set the speed of a motor.
-    * @param motorIndex The index of the motor (0 to 3).
-    * @param speed The speed of the motor (0 to 1000).
-    * @return ESP_OK on success, or an error code on failure.
-    */
     void setMotorSpeed(int motorIndex, u_int32_t speed);
     void setMotorSpeedsZero();
     void disarmMotors();
@@ -43,8 +45,8 @@ public:
     void Task();
 
     void getMotorSpeeds(float output[NUM_MOTORS]);
+    
     SemaphoreHandle_t xMotorSpeedMutex = nullptr;
-
     static SemaphoreHandle_t xControllerRequestMutex;
     static ControllerRequestDTO currentControllerRequestDTO;
 
@@ -57,43 +59,100 @@ private:
         mcpwm_gen_handle_t generator;
     };
 
+    // ==================== HARDWARE CONFIG ====================
     const int escPins[NUM_MOTORS] = {
-        26, // Avant gauche
-        25, // Avant droit
-        33, // Arrière droit
-        32  // Arrière gauche
+        26, // Front-Left (M0)
+        25, // Front-Right (M1)
+        33, // Rear-Right (M2)
+        32  // Rear-Left (M3)
     };
     MotorPwmConfig motorPwmConfigs[NUM_MOTORS];
 
-    static constexpr int PWM_FREQ_HZ = 50;                                      // 50Hz for ESCs
-    static constexpr uint32_t TIMER_RESOLUTION_HZ = 1000000;                    // 1MHz resolution
-    static constexpr uint32_t PERIOD_TICKS = TIMER_RESOLUTION_HZ / PWM_FREQ_HZ; // 20000 ticks for 20ms period
-    static constexpr uint32_t MIN_PULSE_TICKS = 1000;                           // 1000µs pulse width (idle)
-    static constexpr uint32_t MAX_PULSE_TICKS = 2000;                           // 2000µs pulse width (full throttle)
-    static constexpr uint32_t MAX_ANGLE = 60; // Maximum angle for roll and pitch in degrees
-    static constexpr uint32_t MAX_YAW_RATE = 45; // Maximum yaw rate in degrees per second
+    static constexpr int PWM_FREQ_HZ = 50;
+    static constexpr uint32_t TIMER_RESOLUTION_HZ = 1000000;
+    static constexpr uint32_t PERIOD_TICKS = TIMER_RESOLUTION_HZ / PWM_FREQ_HZ;
+    static constexpr uint32_t MIN_PULSE_TICKS = 1000;  // 1ms (idle)
+    static constexpr uint32_t MAX_PULSE_TICKS = 2000;  // 2ms (full throttle)
+    static constexpr uint32_t PULSE_RANGE = MAX_PULSE_TICKS - MIN_PULSE_TICKS;
 
-    static constexpr float pkp = 4.8f;  // Proportional gain
-    static constexpr float pki = 0.05f;  // Integral gain
-    static constexpr float pkd = 22.0f; // Derivative gain
-    static constexpr float rkp = 4.8f;  // Proportional gain
-    static constexpr float rki = 0.05f;  // Integral gain
-    static constexpr float rkd = 22.0f; // Derivative gain
-    static constexpr float yawkp = 8.5f;  // Proportional gain
-    static constexpr float yawki = 0.045f;  // Integral gain
-    static constexpr float yawkd = 0.0f; // Derivative gain
+    // ==================== CONTROL LIMITS ====================
+    static constexpr float MAX_ROLL_ANGLE_DEG = 45.0f;
+    static constexpr float MAX_PITCH_ANGLE_DEG = 45.0f;
+    static constexpr float MAX_YAW_RATE_DEG_S = 180.0f;
+    static constexpr float MAX_ROLL_RATE_DEG_S = 360.0f;
+    static constexpr float MAX_PITCH_RATE_DEG_S = 360.0f;
+    static constexpr float THRUST_HEADROOM_RATIO = 0.15f;  // Reserve 15% for attitude corrections
 
+    // ==================== OUTER LOOP (Angle PID) ====================
+    // Converts stick input (angle setpoint) → rate target
+    // These should be conservative (slow response to avoid oscillation)
+    static constexpr float ANGLE_PITCH_KP = 4.5f;   // angle_error → rate_target
+    static constexpr float ANGLE_PITCH_KI = 0.08f;
+    static constexpr float ANGLE_PITCH_KD = 0.05f;
+
+    static constexpr float ANGLE_ROLL_KP = 4.5f;
+    static constexpr float ANGLE_ROLL_KI = 0.08f;
+    static constexpr float ANGLE_ROLL_KD = 0.05f;
+
+    static constexpr float ANGLE_YAW_KP = 2.0f;
+    static constexpr float ANGLE_YAW_KI = 0.05f;
+    static constexpr float ANGLE_YAW_KD = 0.02f;
+
+    // ==================== INNER LOOP (Rate PID) ====================
+    // Converts rate error → motor corrections
+    // These should be aggressive (fast gyro feedback)
+    static constexpr float RATE_PITCH_KP = 0.15f;   // rate_error → motor_correction
+    static constexpr float RATE_PITCH_KI = 0.05f;
+    static constexpr float RATE_PITCH_KD = 0.002f;
+
+    static constexpr float RATE_ROLL_KP = 0.15f;
+    static constexpr float RATE_ROLL_KI = 0.05f;
+    static constexpr float RATE_ROLL_KD = 0.002f;
+
+    static constexpr float RATE_YAW_KP = 0.08f;
+    static constexpr float RATE_YAW_KI = 0.02f;
+    static constexpr float RATE_YAW_KD = 0.001f;
+
+    // ==================== SAFETY & TUNING ====================
+    static constexpr float DT_MIN = 0.005f;   // Minimum dt (5ms) - prevents derivative spikes
+    static constexpr float DT_MAX = 0.02f;    // Maximum dt (20ms) - detects timing overruns
+    static constexpr float THROTTLE_DEADZONE = 0.02f;  // % of range - disarm if below this
+    static constexpr float MAX_SETPOINT_SLEW_RATE_DEG_S = 200.0f; // max °/s for setpoint ramp
+
+    // ==================== STATE ====================
     float motorSpeeds[NUM_MOTORS] = {0};
     bool isMotorArmed = false;
+    int64_t lastLoopTime = 0;
 
-    PidManager pidPitch{pkp, pki, pkd}; // PID controller for pitch
-    PidManager pidRoll{rkp, rki, rkd};  // PID controller for roll
-    PidManager pidYaw{yawkp, yawki, yawkd};  // PID controller for roll
+    // Outer loop PIDs (angle feedback)
+    PidManager pidAnglePitch{ANGLE_PITCH_KP, ANGLE_PITCH_KI, ANGLE_PITCH_KD};
+    PidManager pidAngleRoll{ANGLE_ROLL_KP, ANGLE_ROLL_KI, ANGLE_ROLL_KD};
+    PidManager pidAngleYaw{ANGLE_YAW_KP, ANGLE_YAW_KI, ANGLE_YAW_KD};
 
-    MPU9250 *imu;
-    // when running in HIL mode the orientation is fetched from usbController
-    // and motor outputs are forwarded through it as well.
+    // Inner loop PIDs (rate feedback)
+    PidManager pidRatePitch{RATE_PITCH_KP, RATE_PITCH_KI, RATE_PITCH_KD};
+    PidManager pidRateRoll{RATE_ROLL_KP, RATE_ROLL_KI, RATE_ROLL_KD};
+    PidManager pidRateYaw{RATE_YAW_KP, RATE_YAW_KI, RATE_YAW_KD};
+
+    MPU9250 *imu = nullptr;
     class ControllerUSB *usbController = nullptr;
+
+    // Previous orientation for rate estimation (via differentiation)
+    float prevPitch = 0.0f;
+    float prevRoll = 0.0f;
+    float prevYaw = 0.0f;
+
+    // Previous smoothed setpoints for slew-rate limiting
+    float prevTargetPitch = 0.0f;
+    float prevTargetRoll  = 0.0f;
+
+    // Last known arming button state — edge detection to avoid calling arm/disarm every tick
+    bool prevArmingState = true;
+
+    // ==================== HELPER FUNCTIONS ====================
+    float normalizeAngle(float angle);
+    float clampValue(float value, float minVal, float maxVal);
+    float clampRateOutput(float value);
 };
 
 #endif

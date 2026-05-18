@@ -41,10 +41,15 @@ MPU9250::Orientation ControllerUSB::getOrientation()
 
 bool ControllerUSB::readLine(char *buf, size_t maxLen)
 {
-    // Read available bytes from UART into the accumulation buffer
-    size_t available = uart_read_bytes(UART_NUM, (uint8_t*)_uartBuffer + _uartBufferLen, 
-                                        sizeof(_uartBuffer) - _uartBufferLen - 1, 
-                                        pdMS_TO_TICKS(50));
+    if (_uartBufferLen >= sizeof(_uartBuffer) - 1) {
+        // Drop garbage when the buffer is full to keep the control loop responsive.
+        _uartBufferLen = 0;
+    }
+
+    // Non-blocking read: keep control loop timing stable in HIL mode.
+    size_t available = uart_read_bytes(UART_NUM, (uint8_t*)_uartBuffer + _uartBufferLen,
+                                        sizeof(_uartBuffer) - _uartBufferLen - 1,
+                                        0);
     
     if (available > 0) {
         _uartBufferLen += available;
@@ -77,20 +82,25 @@ bool ControllerUSB::readLine(char *buf, size_t maxLen)
 void ControllerUSB::readOrientationPacket()
 {
     char line[128];
-    if (readLine(line, sizeof(line))) {
+    // Drain a bounded number of lines and keep the latest valid orientation.
+    for (int i = 0; i < 8 && readLine(line, sizeof(line)); ++i) {
         if (strncmp(line, "O:", 2) == 0) {
             float p, r, y;
             int matched = sscanf(line + 2, "%f %f %f", &p, &r, &y);
             if (matched == 3) {
-                _orientation.pitch = p;
-                _orientation.roll = r;
-                _orientation.yaw = y;
-                ESP_LOGD(TAG, "Orientation RX: pitch=%.2f roll=%.2f yaw=%.2f", p, r, y);
+                // Unity sends roll first, pitch second — swap to match drone frame
+                _orientation.roll  = p;
+                _orientation.pitch = r;
+                _orientation.yaw   = y;
             } else {
-                ESP_LOGW(TAG, "Failed to parse orientation from: %s", line);
+                ESP_LOGV(TAG, "Failed to parse orientation from: %s", line);
             }
-        } else {
-            ESP_LOGW(TAG, "Unknown packet type: %s", line);
+        } else if (strncmp(line, "STOP", 4) == 0) {
+            _emergencyStop = true;
+            ESP_LOGW(TAG, "Emergency stop received from host");
+        } else if (strncmp(line, "ARM", 3) == 0) {
+            _emergencyStop = false;
+            ESP_LOGI(TAG, "Arm command received from host");
         }
     }
 }
@@ -105,4 +115,42 @@ void ControllerUSB::setData(int index, uint32_t motorSpeed)
     uart_write_bytes(UART_NUM, (const char*)buf, off);
     
     ESP_LOGD(TAG, "Motor TX: %s", buf);
+}
+
+void ControllerUSB::sendTelemetry(float stickPitch,
+                                  float stickRoll,
+                                  float stickYaw,
+                                  float stickThrottle,
+                                  float targetPitchAngle,
+                                  float targetRollAngle,
+                                  float targetYawRate,
+                                  float motorCorrectionPitch,
+                                  float motorCorrectionRoll,
+                                  float motorCorrectionYaw,
+                                  float orientationRoll,
+                                  float orientationPitch,
+                                  float orientationYaw)
+{
+    char buf[256];
+    int off = snprintf(
+        buf,
+        sizeof(buf),
+        "T:sp=%.3f sr=%.3f sy=%.3f st=%.3f tp=%.3f tr=%.3f ty=%.3f mcp=%.3f mcr=%.3f mcy=%.3f or=%.3f op=%.3f oy=%.3f\n",
+        stickPitch,
+        stickRoll,
+        stickYaw,
+        stickThrottle,
+        targetPitchAngle,
+        targetRollAngle,
+        targetYawRate,
+        motorCorrectionPitch,
+        motorCorrectionRoll,
+        motorCorrectionYaw,
+        orientationRoll,
+        orientationPitch,
+        orientationYaw);
+
+    if (off > 0) {
+        uart_write_bytes(UART_NUM, (const char*)buf, off);
+    }
 }

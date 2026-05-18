@@ -110,6 +110,7 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
         if(controllerRequestDTO.flightController || controllerRequestDTO.buttonMotorArming || controllerRequestDTO.buttonMotorState){
             if (xSemaphoreTake(MotorManager::xControllerRequestMutex, portMAX_DELAY)) {
                 MotorManager::currentControllerRequestDTO.addInControllerRequestDTO(controllerRequestDTO);
+                ESP_LOGI(TAG_ESP_NOW, "%s", controllerRequestDTO.toString().c_str());
                 xSemaphoreGive(MotorManager::xControllerRequestMutex);
             }
         }

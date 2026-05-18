@@ -13,8 +13,10 @@
  * it simplifies wiring on typical development boards. The protocol is text-based:
  *
  *   - Orientation updates are received from the host as lines starting with
- *     "O:" followed by three floats (pitch roll yaw) separated by spaces.
- *     Example: "O: 1.23 -4.56 78.9\n".
+ *     "O:" followed by three floats (roll pitch yaw) separated by spaces.
+ *     Example: "O: -4.56 1.23 78.9\n". Note: Unity sends roll before pitch.
+ *   - "STOP\n" immediately triggers an emergency stop (latched until "ARM\n").
+ *   - "ARM\n"  clears the emergency stop flag and allows motors to run again.
  *   - Motor commands are sent to the host one motor at a time using a
  *     line of the form "M<index>:<speed>\n".  `<index>` is the motor number
  *     (0–3) and `<speed>` is an unsigned integer value.  The host can collect
@@ -40,6 +42,10 @@ public:
      */
     MPU9250::Orientation getOrientation();
 
+    /** True if Unity sent "STOP\n" and "ARM\n" has not yet been received. */
+    bool isEmergencyStop() const { return _emergencyStop; }
+    void clearEmergencyStop()     { _emergencyStop = false; }
+
     /**
      * @brief Send the current motor speeds to the host.
      *
@@ -48,6 +54,26 @@ public:
      * parse it on the other end.
      */
     void setData(int index, uint32_t motorSpeed);
+
+    /**
+     * @brief Send one-line control telemetry for host-side debugging/plotting.
+     *
+    * Format:
+    * T:sp=<..> sr=<..> sy=<..> st=<..> tp=<..> tr=<..> ty=<..> mcp=<..> mcr=<..> mcy=<..> or=<..> op=<..> oy=<..>\n
+     */
+    void sendTelemetry(float stickPitch,
+                       float stickRoll,
+                       float stickYaw,
+                       float stickThrottle,
+                       float targetPitchAngle,
+                       float targetRollAngle,
+                       float targetYawRate,
+                       float motorCorrectionPitch,
+                       float motorCorrectionRoll,
+                       float motorCorrectionYaw,
+                       float orientationRoll,
+                       float orientationPitch,
+                       float orientationYaw);
 
 private:
     // read a line from UART0 into the provided buffer, returns true if a
@@ -61,4 +87,5 @@ private:
     void readOrientationPacket();
 
     MPU9250::Orientation _orientation;
+    bool _emergencyStop = false;
 };
