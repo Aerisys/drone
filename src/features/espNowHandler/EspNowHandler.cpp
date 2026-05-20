@@ -211,15 +211,16 @@ void EspNowHandler::Task()
             }
         }
 
-        // Gestion du timeout Ping
+        // Gestion du timeout Ping — failsafe RC link
         int64_t now = esp_timer_get_time();
         if (lastPingTimeUs > 0 && !_associationMode) {
             float dtSec = (now - lastPingTimeUs) / 1000000.0f;
             if (dtSec > 2.0f && !pingLost) {
-                ESP_LOGW(TAG_ESP_NOW, "Ping perdu ! (%.2fs)", dtSec);
+                ESP_LOGW(TAG_ESP_NOW, "Ping perdu ! (%.2fs) — failsafe disarm", dtSec);
                 pingLost = true;
-                // Optionnel : repasser en mode association si ping perdu trop longtemps ?
-                // _associationMode = true; 
+                if (motorManager) {
+                    motorManager->disarmMotors();
+                }
             }
         }
 

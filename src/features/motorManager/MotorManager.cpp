@@ -222,12 +222,17 @@ inline u_int32_t constrain(u_int32_t val, u_int32_t min, u_int32_t max)
 // Function to set motor speed
 void MotorManager::setMotorSpeed(int motorIndex, u_int32_t pulse_ticks)
 {
-    if (!isMotorArmed || motorIndex < 0 || motorIndex >= NUM_MOTORS)
+    if (motorIndex < 0 || motorIndex >= NUM_MOTORS)
     {
         return;
     }
 
-    uint32_t pulse = MIN_PULSE_TICKS + constrain(pulse_ticks, 0, MAX_PULSE_TICKS - MIN_PULSE_TICKS);
+    // When disarmed, always drive the ESC to its idle pulse (MIN_PULSE_TICKS).
+    // Returning early would leave the comparator on its last value — the ESC
+    // would keep its last commanded throttle.
+    uint32_t pulse = isMotorArmed
+        ? MIN_PULSE_TICKS + constrain(pulse_ticks, 0, MAX_PULSE_TICKS - MIN_PULSE_TICKS)
+        : MIN_PULSE_TICKS;
 
     if(modeHIL){
         if (usbController) {
@@ -299,7 +304,6 @@ void MotorManager::armMotors()
     // Reset ALL PID controllers (inner + outer) to avoid integral windup
     pidAnglePitch.reset();
     pidAngleRoll.reset();
-    pidAngleYaw.reset();
     pidRatePitch.reset();
     pidRateRoll.reset();
     pidRateYaw.reset();
@@ -366,17 +370,37 @@ void MotorManager::Task()
         {
             if (currentControllerRequestDTO.buttonMotorArming != nullptr)
             {
+                // Use the absolute state sent by the controller, not a local toggle.
+                // A lost packet would otherwise desync controller and drone forever.
+                bool desiredArmed = *currentControllerRequestDTO.buttonMotorArming;
+                delete currentControllerRequestDTO.buttonMotorArming;
                 currentControllerRequestDTO.buttonMotorArming = nullptr;
-                if (!prevArmingState) {
-                    armMotors();
-                    if (modeHIL && usbController) usbController->clearEmergencyStop();
-                } else {
-                    disarmMotors();
+
+                if (desiredArmed != isMotorArmed) {
+                    if (desiredArmed) {
+                        // Refuse to arm if the throttle stick is not at idle.
+                        float currentThrottle = (lastControllerRequestDTO.flightController != nullptr)
+                            ? lastControllerRequestDTO.flightController->throttle
+                            : 0.0f;
+                        if (currentThrottle > THROTTLE_DEADZONE) {
+                            ESP_LOGW(TAG_MOTOR_MANAGER,
+                                     "Arm refused: throttle %.3f above deadzone %.3f",
+                                     currentThrottle, THROTTLE_DEADZONE);
+                        } else {
+                            armMotors();
+                            if (modeHIL && usbController) usbController->clearEmergencyStop();
+                        }
+                    } else {
+                        disarmMotors();
+                    }
                 }
-                prevArmingState = !prevArmingState;
+                prevArmingState = isMotorArmed;
             }
             if (currentControllerRequestDTO.buttonMotorState != nullptr)
             {
+                // Consume the flag so we don't disarm on every control tick.
+                delete currentControllerRequestDTO.buttonMotorState;
+                currentControllerRequestDTO.buttonMotorState = nullptr;
                 disarmMotors();
             }
             if (currentControllerRequestDTO.flightController != nullptr)
@@ -405,6 +429,7 @@ void MotorManager::Task()
             // Raw setpoints from stick
             float targetPitchAngle = stickPitch * MAX_PITCH_ANGLE_DEG;
             float targetRollAngle  = stickRoll  * MAX_ROLL_ANGLE_DEG;
+            // Yaw is pure rate mode — see header.
             float targetYawRate    = clampValue(stickYaw * MAX_YAW_RATE_DEG_S, -MAX_YAW_RATE_DEG_S, MAX_YAW_RATE_DEG_S);
 
             // Slew-rate limit: setpoint cannot jump faster than MAX_SETPOINT_SLEW_RATE_DEG_S
@@ -433,7 +458,6 @@ void MotorManager::Task()
             if (stickThrottle < THROTTLE_DEADZONE) {
                 pidAnglePitch.reset();
                 pidAngleRoll.reset();
-                pidAngleYaw.reset();
                 pidRatePitch.reset();
                 pidRateRoll.reset();
                 pidRateYaw.reset();
@@ -467,14 +491,11 @@ void MotorManager::Task()
             prevYaw = currentOrientation.yaw;
 
             // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
-            // Converts (stick_angle_target - measured_angle) → rate_target
-            
-            // Outer PIDs output: desired rate setpoints
+            // Pitch/roll: PID converts (stick_angle_target - measured_angle) → rate_target.
+            // Yaw: direct rate from stick (acro-style, no angle feedback).
             float desiredPitchRate = pidAnglePitch.calculate(targetPitchAngle, currentOrientation.pitch, dt);
             float desiredRollRate  = pidAngleRoll.calculate(targetRollAngle, currentOrientation.roll, dt);
-            
-            // Yaw: direct rate from stick (simpler, no angle feedback)
-            float desiredYawRate = stickYaw * MAX_YAW_RATE_DEG_S;
+            float desiredYawRate   = targetYawRate;
 
             // Clamp rate targets
             desiredPitchRate = clampValue(desiredPitchRate, -MAX_PITCH_RATE_DEG_S, MAX_PITCH_RATE_DEG_S);
