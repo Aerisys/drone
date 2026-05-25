@@ -10,7 +10,7 @@
 #include <algorithm>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mpu9250.h"
+#include "imu_sensor.h"
 #include "DroneConstants.h"
 
 #define TAG_MOTOR_MANAGER "MotorManager"
@@ -36,7 +36,12 @@ public:
     MotorManager(bool modeHIL = false);
     ~MotorManager();
 
-    bool init(MPU9250 *imu, class ControllerUSB *usb = nullptr);
+    // Takes the abstract IMUSensor interface so this module is decoupled from
+    // any concrete chip (MPU9250 today, ICM-* tomorrow). The caller in
+    // main.cpp still constructs a concrete MPU9250 to drive chip-specific
+    // tuning (setMahonyGains, setSwitchRollPitch, ...) before passing it
+    // here — the implicit upcast is safe because MPU9250 inherits IMUSensor.
+    bool init(IMUSensor *imu, class ControllerUSB *usb = nullptr);
 
     void setMotorSpeed(int motorIndex, u_int32_t speed);
     void setMotorSpeedsZero();
@@ -134,7 +139,7 @@ private:
     PidManager pidRateRoll{RATE_ROLL_KP, RATE_ROLL_KI, RATE_ROLL_KD};
     PidManager pidRateYaw{RATE_YAW_KP, RATE_YAW_KI, RATE_YAW_KD};
 
-    MPU9250 *imu = nullptr;
+    IMUSensor *imu = nullptr;
     class ControllerUSB *usbController = nullptr;
 
     // Previous orientation for rate estimation (via differentiation)

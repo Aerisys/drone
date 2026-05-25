@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mpu9250.h"
+#include "imu_sensor.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include <cstring>
@@ -40,7 +40,7 @@ public:
      * Calling this method will also attempt to read any pending packet from
      * the host so the returned value is always up-to-date.
      */
-    MPU9250::Orientation getOrientation();
+    IMUSensor::Orientation getOrientation();
 
     /** True if Unity sent "STOP\n" and "ARM\n" has not yet been received. */
     bool isEmergencyStop() const { return _emergencyStop; }
@@ -86,6 +86,6 @@ private:
 private:
     void readOrientationPacket();
 
-    MPU9250::Orientation _orientation;
+    IMUSensor::Orientation _orientation;
     bool _emergencyStop = false;
 };

@@ -33,7 +33,7 @@ bool ControllerUSB::init(uint32_t baudRate)
     return true;
 }
 
-MPU9250::Orientation ControllerUSB::getOrientation()
+IMUSensor::Orientation ControllerUSB::getOrientation()
 {
     readOrientationPacket();
     return _orientation;

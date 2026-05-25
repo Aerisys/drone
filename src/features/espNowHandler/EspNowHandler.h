@@ -23,7 +23,9 @@ public:
     EspNowHandler();
     ~EspNowHandler();
 
-    bool init(MPU9250 *imu, MotorManager *motorManager);
+    // Uses the abstract IMUSensor interface for the same decoupling reasons
+    // as MotorManager — see MotorManager::init for the rationale.
+    bool init(IMUSensor *imu, MotorManager *motorManager);
     void send_data(const ControllerRequestData &requestData);
     void send_data(const TelemetryDTO &telemetryData);
     void send_ping();
@@ -37,7 +39,7 @@ public:
     static EspNowHandler* instance; 
 
 private:
-    MPU9250 *imu = nullptr;
+    IMUSensor *imu = nullptr;
     MotorManager *motorManager = nullptr;
     
     volatile bool buttonPressed = false;

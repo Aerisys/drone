@@ -37,7 +37,7 @@ MotorManager::~MotorManager()
 }
 
 // Function to initialize the motor manager
-bool MotorManager::init(MPU9250 *imu, ControllerUSB *usb)
+bool MotorManager::init(IMUSensor *imu, ControllerUSB *usb)
 {
     // Mutex sanity check — both must have been created at construction time
     // (xSemaphoreCreateMutex returns nullptr if the heap is exhausted, which
@@ -316,7 +316,7 @@ void MotorManager::armMotors()
             ESP_LOGE(TAG_MOTOR_MANAGER, "Arm refused: IMU pointer is null");
             return;
         }
-        if (imu->getCalibrationStatus() != MPU9250::CALIBRATED)
+        if (imu->getCalibrationStatus() != IMUSensor::CALIBRATED)
         {
             ESP_LOGW(TAG_MOTOR_MANAGER,
                      "Arm refused: IMU not calibrated (status=%d, still in progress or never run)",
@@ -414,7 +414,7 @@ void MotorManager::Task()
         // HIL mode: orientation only via USB. Gyro rate is derived from
         // orientation differentiation (legacy path, kept further below).
         IMUSensor::SampleBundle snap = {};
-        MPU9250::Orientation currentOrientation = {};
+        IMUSensor::Orientation currentOrientation = {};
         float dt = 0.0f;
 
         if (modeHIL) {

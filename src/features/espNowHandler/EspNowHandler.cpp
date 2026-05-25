@@ -20,7 +20,7 @@ EspNowHandler::~EspNowHandler() {
     if (instance == this) instance = nullptr;
 }
 
-bool EspNowHandler::init(MPU9250 *imuTmp,MotorManager *motorManager)
+bool EspNowHandler::init(IMUSensor *imuTmp, MotorManager *motorManager)
 {
     this->imu = imuTmp;
     this->motorManager = motorManager;
@@ -234,9 +234,9 @@ void EspNowHandler::Task()
         }
 
         if(!_associationMode){
-            MPU9250::CalibrationStatus calibration = imu->getCalibrationStatus();
+            IMUSensor::CalibrationStatus calibration = imu->getCalibrationStatus();
 
-            if(calibration == MPU9250::CalibrationStatus::CALIBRATED){
+            if(calibration == IMUSensor::CalibrationStatus::CALIBRATED){
                 // Envoi périodique des données
                 if (now - lastSendData > 20000LL) { // Toutes les 20 ms (50 Hz)
                     lastSendData = now;
