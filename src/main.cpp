@@ -69,13 +69,16 @@ extern "C" void app_main(void)
     }
 
     // ---- 4. IMU init with new API -----------------------------------------
-    // Default Config for now: intPin=GPIO_NUM_NC (polling 100 Hz fallback),
-    // taskCoreId=tskNO_AFFINITY. Task B2 will wire INT to GPIO 19 and pin
-    // the sensor task to APP_CPU_NUM for 1 kHz operation.
+    // 1 kHz INT-driven path: MPU9250 INT pin wired to GPIO 19 + sensor task
+    // pinned to core 1 (APP_CPU_NUM). Wi-Fi/lwIP are confined to core 0 by
+    // sdkconfig (CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0 + CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0)
+    // so the IMU never gets preempted by network ISRs.
     imu->setFilterMode(MPU9250::MAHONY);
 
     MPU9250::Config imuCfg;
-    // (default values — see imu-lib README; intPin/taskCoreId tuned in B2)
+    imuCfg.intPin       = GPIO_NUM_19;     // DATA_READY -> ISR -> 1 kHz wakeup
+    imuCfg.taskCoreId   = APP_CPU_NUM;     // core 1 (real-time stack)
+    imuCfg.taskPriority = 5;               // PID task below at prio 4
     err = imu->init(i2cBus, imuCfg);
     if (err != ESP_OK)
     {
@@ -119,11 +122,36 @@ extern "C" void app_main(void)
         return;
     }
 
-    // Initialize tasks
-    xTaskCreate([](void *)
+    // ---- 5. Application tasks (pinned for deterministic timing) ------------
+    //
+    // Priority hierarchy:
+    //   IMU sensor task (created by imu->startSensorTask)  prio 5, core 1
+    //   MotorManager (PID consumer)                         prio 4, core 1
+    //   EspNowHandler (radio + telemetry)                   prio 3, core 0
+    //
+    // The PID task at prio 4 = (IMU prio - 1) ensures:
+    //   - On DATA_READY ISR, the IMU task always wins first  ->  publishes
+    //     a fresh snapshot.
+    //   - As soon as it sleeps on its INT wait, the PID consumes the
+    //     snapshot via waitForNewSample()  ->  PID locked to IMU rate.
+    //
+    // EspNowHandler stays on core 0 with Wi-Fi/lwIP so radio ISRs never
+    // jitter the real-time stack on core 1.
+    xTaskCreatePinnedToCore([](void *)
                 { motorManager->Task(); },
-                "MotorManagerTask", 4096, &motorManager, 5, nullptr);
-    xTaskCreate([](void *)
+                "MotorManagerTask",
+                4096,
+                &motorManager,
+                4,                      // prio: IMU sensor (5) - 1
+                nullptr,
+                APP_CPU_NUM);           // core 1 (real-time)
+
+    xTaskCreatePinnedToCore([](void *)
                 { espNowHandler->Task(); },
-                "EspNowHandlerTask", 4096, &espNowHandler, 5, nullptr);
+                "EspNowHandlerTask",
+                4096,
+                &espNowHandler,
+                3,                      // prio: below PID
+                nullptr,
+                PRO_CPU_NUM);           // core 0 (with Wi-Fi/lwIP)
 }
