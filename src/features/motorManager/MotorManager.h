@@ -11,7 +11,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "imu_sensor.h"
-#include "DroneConstants.h"
+// NUM_MOTORS lives in esp-lib v1.2.0+ alongside the TelemetryDTO that uses
+// it for its wire format. We include it here only for the constant — the
+// telemetry payload itself is emitted by EspNowHandler.
+#include "TelemetryDTO.h"
 
 #define TAG_MOTOR_MANAGER "MotorManager"
 #define CONTROL_LOOP_HZ 100

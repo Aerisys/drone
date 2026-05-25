@@ -9,7 +9,7 @@
 - **Langage** : C++17
 - **Dépendances libs** :
   - [`imu-lib`](https://github.com/Aerisys/imu-lib) v1.1+ — driver MPU9250 + AK8963, Mahony 9-DOF, INT-driven, seqlock atomique
-  - [`esp-lib`](https://github.com/Aerisys/esp-lib) v1.1+ — DTOs ESP-NOW (POD, zero heap) partagés contrôleur ↔ drone
+  - [`esp-lib`](https://github.com/Aerisys/esp-lib) **v1.2+** — DTOs ESP-NOW (POD, zero heap) partagés contrôleur ↔ drone, **inclut `TelemetryDTO` + `NUM_MOTORS`** (centralisés depuis v1.2.0)
 
 ## Fonctionnalités
 
@@ -73,8 +73,7 @@ src/
         └── PidManager.cpp
 
 include/
-├── DroneConstants.h                  # NUM_MOTORS (source unique)
-└── TelemetryDTO.h                    # DTO télémétrie unifié IMU + motors
+└── (vide — TelemetryDTO + NUM_MOTORS fournis par esp-lib v1.2.0+)
 ```
 
 ### Tasks FreeRTOS (pinning)
