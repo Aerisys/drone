@@ -336,8 +336,8 @@ float MotorManager::clampRateOutput(float value)
 void MotorManager::Task()
 {
     ControllerRequestDTO lastControllerRequestDTO;
-    MPU9250::Orientation currentOrientation;
-    int64_t lastTime = esp_timer_get_time();
+    int64_t lastTime         = esp_timer_get_time(); // HIL dt source
+    uint64_t lastSnapshotUs  = 0;                    // real-mode dt source (0 = first iter)
 
     ESP_LOGI(TAG_MOTOR_MANAGER, "[%lu ms] MotorManager Task running...", esp_log_timestamp());
 
@@ -353,10 +353,34 @@ void MotorManager::Task()
     while (true)
     {
         // ===== STEP 1: READ SENSORS =====
+        // Real mode: one atomic snapshot from the imu-lib seqlock — gives us
+        // a coherent set (orientation + RAW gyro + accel + quaternion + ts)
+        // taken at the same IMU iteration. Inner-rate PID uses snap.gyro
+        // directly (no derivation noise, no 1-sample lag).
+        //
+        // HIL mode: orientation only via USB. Gyro rate is derived from
+        // orientation differentiation (legacy path, kept further below).
+        IMUSensor::SampleBundle snap = {};
+        MPU9250::Orientation currentOrientation = {};
+        float dt = 0.0f;
+
         if (modeHIL) {
-            if (usbController) currentOrientation = usbController->getOrientation();            
+            if (usbController) currentOrientation = usbController->getOrientation();
+            int64_t now = esp_timer_get_time();
+            dt = (now - lastTime) * 1e-6f;
+            lastTime = now;
         } else {
-            currentOrientation = imu->getOrientation();
+            snap = imu->getSnapshot();
+            currentOrientation = snap.orientation;
+            // dt from the IMU sample timestamp (true inter-sample interval).
+            // First iteration: assume 1 ms (nominal 1 kHz INT rate) to seed
+            // the derivative terms without a giant first-step error.
+            if (lastSnapshotUs == 0) {
+                dt = 0.001f;
+            } else {
+                dt = (snap.timestampUs - lastSnapshotUs) * 1e-6f;
+            }
+            lastSnapshotUs = snap.timestampUs;
         }
 
         // ===== STEP 2: UPDATE CONTROLLER COMMANDS =====
@@ -398,11 +422,9 @@ void MotorManager::Task()
         // ===== STEP 3: CONTROL LOOP (only if armed) =====
         if (isMotorArmed && lastControllerRequestDTO.has_flightController)
         {
-            int64_t now = esp_timer_get_time();
-            float dt = (now - lastTime) * 1e-6f;
-            lastTime = now;
-
-            // Clamp dt to prevent derivative spikes from timing jitter
+            // dt already computed in step 1 from the appropriate source
+            // (IMU snapshot timestamp in real mode, esp_timer in HIL).
+            // Clamp to prevent derivative spikes from timing jitter.
             dt = clampValue(dt, DT_MIN, DT_MAX);
 
             // ===== 3.1: PARSE STICK INPUTS =====
@@ -460,20 +482,39 @@ void MotorManager::Task()
             currentOrientation.roll  = normalizeAngle(currentOrientation.roll);
             currentOrientation.yaw   = normalizeAngle(currentOrientation.yaw);
 
-            // Estimate gyro rates via angle differentiation
-            // This avoids needing direct gyro access and works in both real/HIL modes
-            float angleDiffPitch = normalizeAngle(currentOrientation.pitch - prevPitch);
-            float angleDiffRoll  = normalizeAngle(currentOrientation.roll - prevRoll);
-            float angleDiffYaw   = normalizeAngle(currentOrientation.yaw - prevYaw);
+            float gyroPitchRate, gyroRollRate, gyroYawRate;
+            if (modeHIL) {
+                // HIL mode: USB controller only ships orientation. Derive
+                // body rate via angle differentiation. Introduces ~1-sample
+                // lag + numerical noise; acceptable for sim purposes.
+                float angleDiffPitch = normalizeAngle(currentOrientation.pitch - prevPitch);
+                float angleDiffRoll  = normalizeAngle(currentOrientation.roll  - prevRoll);
+                float angleDiffYaw   = normalizeAngle(currentOrientation.yaw   - prevYaw);
 
-            float gyroPitchRate = (dt > 0.0f) ? angleDiffPitch / dt : 0.0f;  // deg/s
-            float gyroRollRate  = (dt > 0.0f) ? angleDiffRoll / dt : 0.0f;
-            float gyroYawRate   = (dt > 0.0f) ? angleDiffYaw / dt : 0.0f;
+                gyroPitchRate = (dt > 0.0f) ? angleDiffPitch / dt : 0.0f;  // deg/s
+                gyroRollRate  = (dt > 0.0f) ? angleDiffRoll  / dt : 0.0f;
+                gyroYawRate   = (dt > 0.0f) ? angleDiffYaw   / dt : 0.0f;
 
-            // Store current angles for next iteration
-            prevPitch = currentOrientation.pitch;
-            prevRoll = currentOrientation.roll;
-            prevYaw = currentOrientation.yaw;
+                prevPitch = currentOrientation.pitch;
+                prevRoll  = currentOrientation.roll;
+                prevYaw   = currentOrientation.yaw;
+            } else {
+                // Real mode: raw gyro from the IMU snapshot — DLPF-filtered
+                // (and notch-filtered if `imu->setGyroNotch(...)` was called).
+                // Already calibrated (gyroOffset + temperature comp applied).
+                //
+                // Axis mapping assumes standard aerospace body convention:
+                //   X forward  -> rotation around X = ROLL rate
+                //   Y right    -> rotation around Y = PITCH rate
+                //   Z down     -> rotation around Z = YAW rate
+                //
+                // If your physical mounting differs, either:
+                //   - call imu->setInvertAxis(...) at boot to flip signs, or
+                //   - swap the assignments below.
+                gyroPitchRate = snap.gyro.y;
+                gyroRollRate  = snap.gyro.x;
+                gyroYawRate   = snap.gyro.z;
+            }
 
             // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
             // Converts (stick_angle_target - measured_angle) → rate_target
@@ -577,7 +618,23 @@ void MotorManager::Task()
             for (int i = 0; i < NUM_MOTORS; i++) setMotorSpeed(i, 0);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // 100Hz loop
+        // ===== STEP 4: WAIT FOR NEXT TICK =====
+        // Real mode: block on the IMU sample semaphore. The sensor task
+        //   publishes at ~1 kHz (DATA_READY INT), so this loop runs in
+        //   lockstep with the sensor — no phase drift, no missed samples.
+        //   20 ms timeout = watchdog (sensor stuck -> we still iterate
+        //   to keep failsafes alive; C2 will add an explicit disarm).
+        //
+        // HIL mode: no INT, no semaphore -> classic 100 Hz tick delay.
+        if (modeHIL) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        } else {
+            if (imu->waitForNewSample(20) != ESP_OK) {
+                ESP_LOGW(TAG_MOTOR_MANAGER, "IMU sample timeout (>20 ms) — sensor stuck?");
+                // continue with the (stale) last snapshot. Failsafe disarm
+                // on prolonged stuck sensor will be added in task C2.
+            }
+        }
     }
 }
 
