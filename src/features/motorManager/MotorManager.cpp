@@ -3,7 +3,7 @@
 #include "esp_timer.h"
 #include <features/espNowHandler/EspNowHandler.h>
 #include "MotorManager.h"
-
+#include <cmath>
 // when running in HIL mode we rely on the USB controller to receive orientation
 // and to send motor outputs back to the host.
 #include "features/controllerUSB/ControllerUSB.h"
