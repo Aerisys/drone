@@ -24,13 +24,10 @@ bool EspNowHandler::init(MPU9250 *imuTmp,MotorManager *motorManager)
 {
     this->imu = imuTmp;
     this->motorManager = motorManager;
-    // Correction : une seule initialisation NVS
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(err);
+
+    // NVS is initialised once in app_main() for the whole firmware (it is
+    // also consumed by imu-lib for its calibration blob). Do NOT re-init
+    // here — duplicate init is idempotent but masks a missing init in main.
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
