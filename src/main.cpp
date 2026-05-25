@@ -87,6 +87,38 @@ extern "C" void app_main(void)
         // we still want the rest of the firmware (USB bridge, ESP-NOW) running.
     }
 
+    // ---- Runtime IMU tuning ------------------------------------------------
+    // Adjust these for THIS airframe. Defaults below are sane starting points
+    // for a typical 5" quad with the MPU9250 mounted right-way-up, X axis
+    // pointing forward.
+    //
+    // Mahony gains:
+    //   Kp ~ 1.0 = responsive correction (good for drones). 0.5 = smoother
+    //              but slower convergence. 2.0+ = nervous, more noise.
+    //   Ki = 0.0 default — non-zero Ki causes integral wind-up during
+    //              aggressive maneuvers (flips, fast yaws). Only enable
+    //              (typ. < 0.005) if observed gyro bias drift in flight
+    //              justifies it.
+    imu->setMahonyGains(1.0f, 0.0f);
+
+    // Axis orientation knobs — adjust ONLY if your physical mounting differs
+    // from the "X forward / Y right / Z down" reference:
+    //
+    //   setSwitchRollPitch(true) -> swap roll/pitch in the Euler output
+    //     (use if a pure pitch motion in flight reads as roll on the
+    //     ground-station HUD, or vice-versa).
+    //
+    //   setInvertAxis(true, _, _) -> negate accel/gyro/mag X axis
+    //     (use if a roll-right input results in roll-left actual motion).
+    //   setInvertAxis(_, true, _) -> negate Y axis (same logic for pitch).
+    //   setInvertAxis(_, _, true) -> negate Z axis (same logic for yaw).
+    //
+    // Determine by hand-tilting the disarmed drone and watching the
+    // telemetry quaternion / euler: tilt one axis at a time and confirm
+    // the sign matches your expectation. Adjust here once, commit, done.
+    imu->setSwitchRollPitch(false);
+    imu->setInvertAxis(false, false, false);
+
     if(!motorManager->modeHIL){
         // imu->init() auto-loads NVS calibration. Only trigger a fresh
         // gyro/accel calibration if nothing was found on disk — otherwise
