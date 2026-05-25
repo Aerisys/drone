@@ -149,6 +149,14 @@ private:
     // Last known arming button state — edge detection to avoid calling arm/disarm every tick
     bool prevArmingState = true;
 
+    // Latched radio-failsafe flag. Set true when the ESP-NOW ping has been
+    // lost > 2 s and the drone was armed (cf. EspNowHandler::pingLost).
+    // Once latched, armMotors() refuses to re-arm as long as `pingLost` is
+    // still true. The latch clears the next time the user explicitly
+    // presses the arm button AND ping has recovered — re-arming "by
+    // accident" while still out of radio range is therefore impossible.
+    volatile bool failsafeEngaged = false;
+
     // ==================== HELPER FUNCTIONS ====================
     float normalizeAngle(float angle);
     float clampValue(float value, float minVal, float maxVal);

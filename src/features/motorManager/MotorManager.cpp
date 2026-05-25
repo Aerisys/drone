@@ -293,9 +293,26 @@ void MotorManager::disarmMotors()
 // Function to reset the emergency stop
 void MotorManager::armMotors()
 {
+    // Radio failsafe guard. After a failsafe disarm (ping lost > 2 s), the
+    // drone refuses to re-arm as long as the radio is still down. Once ping
+    // has recovered the latch is released here on the next user arm intent
+    // — making the re-arm an explicit, conscious action rather than an
+    // accidental side-effect of walking back into range.
+    if (failsafeEngaged)
+    {
+        if (EspNowHandler::pingLost)
+        {
+            ESP_LOGW(TAG_MOTOR_MANAGER,
+                     "Arm refused: radio failsafe latched and ping still lost");
+            return;
+        }
+        ESP_LOGI(TAG_MOTOR_MANAGER, "Radio failsafe cleared (ping recovered) — arming");
+        failsafeEngaged = false;
+    }
+
     isMotorArmed = true;
     ESP_LOGI(TAG_MOTOR_MANAGER, "enable Motor Arming; motors zeroed");
-    
+
     // Reset ALL PID controllers (inner + outer) to avoid integral windup
     pidAnglePitch.reset();
     pidAngleRoll.reset();
@@ -303,7 +320,7 @@ void MotorManager::armMotors()
     pidRatePitch.reset();
     pidRateRoll.reset();
     pidRateYaw.reset();
-    
+
     // Send idle pulse to ESCs
     for (int i = 0; i < NUM_MOTORS; i++)
     {
@@ -389,6 +406,20 @@ void MotorManager::Task()
             if (usbController->isEmergencyStop()) {
                 disarmMotors();
             }
+        }
+
+        // Radio failsafe (real mode only) — EspNowHandler sets pingLost = true
+        // when no ESP-NOW ping has been received for > 2 s. We disarm
+        // immediately and latch `failsafeEngaged` so re-arming requires an
+        // explicit user button press AND the ping to have recovered (cf.
+        // guard in armMotors). prevArmingState is forced to the "disarmed"
+        // value so the next button press takes the arm branch.
+        if (!modeHIL && EspNowHandler::pingLost && isMotorArmed)
+        {
+            ESP_LOGW(TAG_MOTOR_MANAGER, "RADIO FAILSAFE: ping lost > 2 s — auto-disarming");
+            disarmMotors();
+            failsafeEngaged  = true;
+            prevArmingState  = false;
         }
 
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
