@@ -11,8 +11,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mpu9250.h"
+#include "DroneConstants.h"
 
-#define NUM_MOTORS 4
 #define TAG_MOTOR_MANAGER "MotorManager"
 #define CONTROL_LOOP_HZ 100
 #define CONTROL_LOOP_DT (1.0f / CONTROL_LOOP_HZ)

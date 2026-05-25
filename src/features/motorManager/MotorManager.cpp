@@ -342,7 +342,12 @@ void MotorManager::Task()
     ESP_LOGI(TAG_MOTOR_MANAGER, "[%lu ms] MotorManager Task running...", esp_log_timestamp());
 
     if(modeHIL){
-        lastControllerRequestDTO.flightController = new FlightController();
+        // esp-lib v1.1.0: assignation par valeur (plus de `new`).
+        // Initialise un FlightController neutre (tous axes a 0) pour que les
+        // accès `lastControllerRequestDTO.flightController.xxx` soient
+        // toujours valides en mode HIL avant le premier paquet reçu.
+        lastControllerRequestDTO.flightController     = FlightController();
+        lastControllerRequestDTO.has_flightController = true;
     }
 
     while (true)
@@ -364,9 +369,10 @@ void MotorManager::Task()
 
         if (xSemaphoreTake(xControllerRequestMutex, portMAX_DELAY))
         {
-            if (currentControllerRequestDTO.buttonMotorArming != nullptr)
+            if (currentControllerRequestDTO.has_buttonMotorArming)
             {
-                currentControllerRequestDTO.buttonMotorArming = nullptr;
+                // Consume the toggle event so we don't re-arm/disarm every tick.
+                currentControllerRequestDTO.has_buttonMotorArming = false;
                 if (!prevArmingState) {
                     armMotors();
                     if (modeHIL && usbController) usbController->clearEmergencyStop();
@@ -375,19 +381,22 @@ void MotorManager::Task()
                 }
                 prevArmingState = !prevArmingState;
             }
-            if (currentControllerRequestDTO.buttonMotorState != nullptr)
+            if (currentControllerRequestDTO.has_buttonMotorState)
             {
+                // Kill switch: latch — do NOT consume the flag, drone stays
+                // disarmed as long as the controller asserts the kill state.
                 disarmMotors();
             }
-            if (currentControllerRequestDTO.flightController != nullptr)
+            if (currentControllerRequestDTO.has_flightController)
             {
+                // POD copy (esp-lib v1.1) — memberwise, no heap, no race.
                 lastControllerRequestDTO = currentControllerRequestDTO;
             }
             xSemaphoreGive(xControllerRequestMutex);
         }
 
         // ===== STEP 3: CONTROL LOOP (only if armed) =====
-        if (isMotorArmed && lastControllerRequestDTO.flightController != nullptr)
+        if (isMotorArmed && lastControllerRequestDTO.has_flightController)
         {
             int64_t now = esp_timer_get_time();
             float dt = (now - lastTime) * 1e-6f;
@@ -397,10 +406,10 @@ void MotorManager::Task()
             dt = clampValue(dt, DT_MIN, DT_MAX);
 
             // ===== 3.1: PARSE STICK INPUTS =====
-            float stickPitch = lastControllerRequestDTO.flightController->pitch;      // [-1..+1]
-            float stickRoll  = lastControllerRequestDTO.flightController->roll;       // [-1..+1]
-            float stickYaw   = lastControllerRequestDTO.flightController->yaw;        // [-1..+1]
-            float stickThrottle = lastControllerRequestDTO.flightController->throttle; // [0..+1]
+            float stickPitch    = lastControllerRequestDTO.flightController.pitch;    // [-1..+1]
+            float stickRoll     = lastControllerRequestDTO.flightController.roll;     // [-1..+1]
+            float stickYaw      = lastControllerRequestDTO.flightController.yaw;      // [-1..+1]
+            float stickThrottle = lastControllerRequestDTO.flightController.throttle; // [0..+1]
 
             // Raw setpoints from stick
             float targetPitchAngle = stickPitch * MAX_PITCH_ANGLE_DEG;

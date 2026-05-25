@@ -7,7 +7,7 @@
 #include <esp_log.h>
 #include <string.h>
 #include <nvs_flash.h>
-#include <mpuDTO.h>
+#include "TelemetryDTO.h"
 
 #define TAG_ESP_NOW "ESP_NOW"
 
@@ -25,7 +25,7 @@ public:
 
     bool init(MPU9250 *imu, MotorManager *motorManager);
     void send_data(const ControllerRequestData &requestData);
-    void send_data(const mpuDTO &mpuData);
+    void send_data(const TelemetryDTO &telemetryData);
     void send_ping();
     void Task();
 

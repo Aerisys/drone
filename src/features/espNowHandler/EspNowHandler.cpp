@@ -4,7 +4,7 @@
 #include <esp_mac.h>
 #include <PairingPacket.h> // Assurez-vous que ce fichier existe
 #include "EspNowHandler.h"
-#include <mpuDTO.h>
+#include "TelemetryDTO.h"
 
 // Initialisation des membres statiques
 int64_t EspNowHandler::lastPingTimeUs = 0;
@@ -102,9 +102,14 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
         ControllerRequestData receivedData;
         memcpy(&receivedData, data, sizeof(receivedData));  
 
+        // esp-lib v1.1.0: fromStruct() is zero-heap, safe to call from this
+        // Wi-Fi receive callback (ISR-like context). The DTO is fully POD.
         ControllerRequestDTO controllerRequestDTO = ControllerRequestDTO::fromStruct(receivedData);
 
-        if(controllerRequestDTO.flightController || controllerRequestDTO.buttonMotorArming || controllerRequestDTO.buttonMotorState){
+        if (controllerRequestDTO.has_flightController
+            || controllerRequestDTO.has_buttonMotorArming
+            || controllerRequestDTO.has_buttonMotorState)
+        {
             if (xSemaphoreTake(MotorManager::xControllerRequestMutex, portMAX_DELAY)) {
                 MotorManager::currentControllerRequestDTO.addInControllerRequestDTO(controllerRequestDTO);
                 ESP_LOGI(TAG_ESP_NOW, "%s", controllerRequestDTO.toString().c_str());
@@ -176,11 +181,11 @@ void EspNowHandler::send_data(const ControllerRequestData &requestData)
     esp_now_send(peer_mac, (uint8_t *)&requestData, sizeof(requestData));
 }
 
-void EspNowHandler::send_data(const mpuDTO &mpuData)
+void EspNowHandler::send_data(const TelemetryDTO &telemetryData)
 {
     if (_associationMode) return; // Ne pas envoyer si on n'est pas associé
 
-    esp_now_send(peer_mac, (uint8_t *)&mpuData, sizeof(mpuData));
+    esp_now_send(peer_mac, (uint8_t *)&telemetryData, sizeof(telemetryData));
 }
 
 void EspNowHandler::send_ping()
@@ -225,30 +230,31 @@ void EspNowHandler::Task()
 
             if(calibration == MPU9250::CalibrationStatus::CALIBRATED){
                 // Envoi périodique des données
-                if (now - lastSendData > 20000LL) { // Toutes les 20 ms
+                if (now - lastSendData > 20000LL) { // Toutes les 20 ms (50 Hz)
                     lastSendData = now;
 
-                    float motorSpeeds[NUM_MOTORS] ={0};
+                    float motorSpeeds[NUM_MOTORS] = {0};
                     motorManager->getMotorSpeeds(motorSpeeds);
 
-                    ESP_LOGI(TAG_ESP_NOW, "ESPNOWHANDLER Motor Speeds: [%.2f, %.2f, %.2f, %.2f]", 
+                    ESP_LOGI(TAG_ESP_NOW, "ESPNOWHANDLER Motor Speeds: [%.2f, %.2f, %.2f, %.2f]",
                              motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
 
-                    MPU9250::Vector3 accel = imu->getAccel();
-                    MPU9250::Vector3 gyro = imu->getGyro();
-                    MPU9250::Vector3 mag = imu->getMag();
-                    MPU9250::Orientation orientation = imu->getOrientation();
+                    // imu-lib v1.1: getSnapshot() retourne TOUS les champs d'une
+                    // seule lecture seqlock atomique -> accel/gyro/mag/orientation/
+                    // quaternion/temperature tous pris a la meme iteration sensor.
+                    // Plus de risque d'incoherence inter-champs comme avec les
+                    // 4 getters separes precedents.
+                    IMUSensor::SampleBundle snap = imu->getSnapshot();
 
-                    mpuDTO dto;
-                    dto.accel = accel;
-                    dto.gyro = gyro;
-                    dto.mag = mag;  
-                    dto.orientation = orientation; 
-
-                    dto.motorSpeeds[0] = motorSpeeds[0];
-                    dto.motorSpeeds[1] = motorSpeeds[1];
-                    dto.motorSpeeds[2] = motorSpeeds[2];
-                    dto.motorSpeeds[3] = motorSpeeds[3];
+                    TelemetryDTO dto;
+                    dto.accel       = snap.accel;
+                    dto.gyro        = snap.gyro;
+                    dto.mag         = snap.mag;
+                    dto.orientation = snap.orientation;
+                    dto.quaternion  = snap.quaternion;
+                    dto.temperature = snap.temperature;
+                    dto.timestampUs = snap.timestampUs;
+                    memcpy(dto.motorSpeeds, motorSpeeds, sizeof(dto.motorSpeeds));
 
                     send_data(dto);
                 }
