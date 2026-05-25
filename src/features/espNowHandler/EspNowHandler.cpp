@@ -110,10 +110,18 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
             || controllerRequestDTO.has_buttonMotorArming
             || controllerRequestDTO.has_buttonMotorState)
         {
-            if (xSemaphoreTake(MotorManager::xControllerRequestMutex, portMAX_DELAY)) {
+            // Bounded timeout: this runs in the ESP-NOW receive callback
+            // (Wi-Fi-internal context). Blocking indefinitely on a mutex
+            // could stall the Wi-Fi stack and trigger crashes/watchdogs.
+            // 10 ms is generous vs. the mutex hold time in MotorManager::Task
+            // (~µs). If we still can't acquire, we drop this packet — the
+            // controller will resend at the next tick anyway.
+            if (xSemaphoreTake(MotorManager::xControllerRequestMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 MotorManager::currentControllerRequestDTO.addInControllerRequestDTO(controllerRequestDTO);
                 ESP_LOGI(TAG_ESP_NOW, "%s", controllerRequestDTO.toString().c_str());
                 xSemaphoreGive(MotorManager::xControllerRequestMutex);
+            } else {
+                ESP_LOGW(TAG_ESP_NOW, "Dropped packet: controller request mutex timeout");
             }
         }
     } 

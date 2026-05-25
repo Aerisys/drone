@@ -94,9 +94,10 @@ private:
     static constexpr float ANGLE_ROLL_KI = 0.08f;
     static constexpr float ANGLE_ROLL_KD = 0.05f;
 
-    static constexpr float ANGLE_YAW_KP = 2.0f;
-    static constexpr float ANGLE_YAW_KI = 0.05f;
-    static constexpr float ANGLE_YAW_KD = 0.02f;
+    // Yaw is NOT controlled by an outer angle PID: stick → rate directly
+    // (rate setpoint = stick * MAX_YAW_RATE_DEG_S), then the inner rate PID
+    // tracks it. ANGLE_YAW_KP/KI/KD constants and the matching `pidAngleYaw`
+    // instance were removed (computed but never used).
 
     // ==================== INNER LOOP (Rate PID) ====================
     // Converts rate error → motor corrections
@@ -124,10 +125,9 @@ private:
     bool isMotorArmed = false;
     int64_t lastLoopTime = 0;
 
-    // Outer loop PIDs (angle feedback)
+    // Outer loop PIDs (angle feedback) — yaw skipped on purpose, see note above
     PidManager pidAnglePitch{ANGLE_PITCH_KP, ANGLE_PITCH_KI, ANGLE_PITCH_KD};
     PidManager pidAngleRoll{ANGLE_ROLL_KP, ANGLE_ROLL_KI, ANGLE_ROLL_KD};
-    PidManager pidAngleYaw{ANGLE_YAW_KP, ANGLE_YAW_KI, ANGLE_YAW_KD};
 
     // Inner loop PIDs (rate feedback)
     PidManager pidRatePitch{RATE_PITCH_KP, RATE_PITCH_KI, RATE_PITCH_KD};

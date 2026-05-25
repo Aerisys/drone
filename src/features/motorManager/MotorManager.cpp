@@ -39,6 +39,18 @@ MotorManager::~MotorManager()
 // Function to initialize the motor manager
 bool MotorManager::init(MPU9250 *imu, ControllerUSB *usb)
 {
+    // Mutex sanity check — both must have been created at construction time
+    // (xSemaphoreCreateMutex returns nullptr if the heap is exhausted, which
+    // is virtually impossible at boot but the resulting nullptr deref would
+    // crash hard, so we surface the error cleanly here).
+    if (xMotorSpeedMutex == nullptr || xControllerRequestMutex == nullptr)
+    {
+        ESP_LOGE(TAG_MOTOR_MANAGER,
+                 "Mutex creation failed (motorSpeed=%p, controllerReq=%p)",
+                 xMotorSpeedMutex, xControllerRequestMutex);
+        return false;
+    }
+
     // in HIL mode we rely on the USB controller for orientation and motor
     // output.  the caller has responsibility to pass a valid pointer.
     if (this->modeHIL) {
@@ -337,10 +349,10 @@ void MotorManager::armMotors()
     isMotorArmed = true;
     ESP_LOGI(TAG_MOTOR_MANAGER, "enable Motor Arming; motors zeroed");
 
-    // Reset ALL PID controllers (inner + outer) to avoid integral windup
+    // Reset ALL PID controllers (inner + outer) to avoid integral windup.
+    // No pidAngleYaw — yaw is stick-to-rate direct, no angle PID.
     pidAnglePitch.reset();
     pidAngleRoll.reset();
-    pidAngleYaw.reset();
     pidRatePitch.reset();
     pidRateRoll.reset();
     pidRateYaw.reset();
@@ -532,7 +544,6 @@ void MotorManager::Task()
             if (stickThrottle < THROTTLE_DEADZONE) {
                 pidAnglePitch.reset();
                 pidAngleRoll.reset();
-                pidAngleYaw.reset();
                 pidRatePitch.reset();
                 pidRateRoll.reset();
                 pidRateYaw.reset();
@@ -587,23 +598,23 @@ void MotorManager::Task()
             // ===== 3.4: OUTER LOOP - ANGLE TO RATE =====
             // Converts (stick_angle_target - measured_angle) → rate_target
             
-            // Outer PIDs output: desired rate setpoints
+            // Outer PIDs output: desired rate setpoints (pitch + roll only).
+            // Yaw skips the outer loop — `targetYawRate` (computed once in
+            // 3.1) feeds the inner rate PID directly. This avoids a
+            // duplicate `desiredYawRate = stickYaw * MAX_YAW_RATE_DEG_S`
+            // computation and removes the dead `pidAngleYaw` instance.
             float desiredPitchRate = pidAnglePitch.calculate(targetPitchAngle, currentOrientation.pitch, dt);
             float desiredRollRate  = pidAngleRoll.calculate(targetRollAngle, currentOrientation.roll, dt);
-            
-            // Yaw: direct rate from stick (simpler, no angle feedback)
-            float desiredYawRate = stickYaw * MAX_YAW_RATE_DEG_S;
 
             // Clamp rate targets
             desiredPitchRate = clampValue(desiredPitchRate, -MAX_PITCH_RATE_DEG_S, MAX_PITCH_RATE_DEG_S);
-            desiredRollRate  = clampValue(desiredRollRate, -MAX_ROLL_RATE_DEG_S, MAX_ROLL_RATE_DEG_S);
-            desiredYawRate   = clampValue(desiredYawRate, -MAX_YAW_RATE_DEG_S, MAX_YAW_RATE_DEG_S);
+            desiredRollRate  = clampValue(desiredRollRate,  -MAX_ROLL_RATE_DEG_S,  MAX_ROLL_RATE_DEG_S);
 
             // ===== 3.5: INNER LOOP - RATE TO MOTOR CORRECTIONS =====
             // Converts (desired_rate - measured_rate) → motor_correction
             float motorCorrectionPitch = pidRatePitch.calculate(desiredPitchRate, gyroPitchRate, dt);
-            float motorCorrectionRoll  = pidRateRoll.calculate(desiredRollRate, gyroRollRate, dt);
-            float motorCorrectionYaw   = pidRateYaw.calculate(desiredYawRate, gyroYawRate, dt);
+            float motorCorrectionRoll  = pidRateRoll.calculate(desiredRollRate,  gyroRollRate,  dt);
+            float motorCorrectionYaw   = pidRateYaw.calculate(targetYawRate,     gyroYawRate,   dt);
 
             // Clamp motor corrections to reserved thrust headroom
             motorCorrectionPitch = clampValue(motorCorrectionPitch, -thrustHeadroom, thrustHeadroom);
@@ -652,6 +663,15 @@ void MotorManager::Task()
             // M2 (Rear-Right):    T + pitch - roll - yaw
             // M3 (Rear-Left):     T + pitch + roll + yaw
 
+            // ===== 3.6+3.7: MIXER + SEND TO ESCs (single mutex hold) =====
+            // Previously took the mutex 5 times (1 mixer + 4× ESC send). Now
+            // a single critical section wraps both compute and dispatch:
+            //   - motorSpeeds[] is only written by this task (the mutex only
+            //     guards cross-task READS from EspNowHandler::getMotorSpeeds);
+            //   - setMotorSpeed() pokes a single MCPWM comparator register
+            //     (~µs), so holding the mutex during the 4-call loop is
+            //     cheap and gives the telemetry reader a fully coherent
+            //     snapshot of all 4 motors at once.
             if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE)
             {
                 auto clampMotor = [](float val) -> float {
@@ -669,15 +689,12 @@ void MotorManager::Task()
                     motorSpeeds[2] = clampMotor(usableThrottle + motorCorrectionPitch - motorCorrectionRoll - motorCorrectionYaw);
                     motorSpeeds[3] = clampMotor(usableThrottle + motorCorrectionPitch + motorCorrectionRoll + motorCorrectionYaw);
                 }
-                xSemaphoreGive(xMotorSpeedMutex);
-            }
 
-            // ===== 3.7: SEND TO ESCs =====
-            for (int i = 0; i < NUM_MOTORS; i++) {
-                if (xSemaphoreTake(xMotorSpeedMutex, portMAX_DELAY) == pdTRUE) {
+                // Dispatch within the same critical section.
+                for (int i = 0; i < NUM_MOTORS; i++) {
                     setMotorSpeed(i, motorSpeeds[i]);
-                    xSemaphoreGive(xMotorSpeedMutex);
                 }
+                xSemaphoreGive(xMotorSpeedMutex);
             }
         }
         else if (!isMotorArmed)
