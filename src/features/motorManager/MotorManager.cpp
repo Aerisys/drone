@@ -293,11 +293,35 @@ void MotorManager::disarmMotors()
 // Function to reset the emergency stop
 void MotorManager::armMotors()
 {
-    // Radio failsafe guard. After a failsafe disarm (ping lost > 2 s), the
-    // drone refuses to re-arm as long as the radio is still down. Once ping
-    // has recovered the latch is released here on the next user arm intent
-    // — making the re-arm an explicit, conscious action rather than an
-    // accidental side-effect of walking back into range.
+    // ===== Real-mode IMU readiness guard =====
+    // Skipped in HIL where the sensor is virtual (no calibration, no I2C).
+    // These checks run BEFORE the radio failsafe guard so we never arm with
+    // a dead/uncalibrated IMU, even if the radio link is perfect.
+    if (!modeHIL)
+    {
+        if (imu == nullptr)
+        {
+            ESP_LOGE(TAG_MOTOR_MANAGER, "Arm refused: IMU pointer is null");
+            return;
+        }
+        if (imu->getCalibrationStatus() != MPU9250::CALIBRATED)
+        {
+            ESP_LOGW(TAG_MOTOR_MANAGER,
+                     "Arm refused: IMU not calibrated (status=%d, still in progress or never run)",
+                     (int)imu->getCalibrationStatus());
+            return;
+        }
+        if (!imu->isSensorHealthy())
+        {
+            ESP_LOGW(TAG_MOTOR_MANAGER, "Arm refused: IMU reports unhealthy (I2C error threshold reached)");
+            return;
+        }
+    }
+
+    // ===== Radio failsafe latch guard =====
+    // After a failsafe disarm (ping lost > 2 s OR sensor unhealthy), the
+    // drone refuses to re-arm until the underlying cause has cleared. Once
+    // the latch can be released, the next user arm press clears it.
     if (failsafeEngaged)
     {
         if (EspNowHandler::pingLost)
@@ -306,7 +330,7 @@ void MotorManager::armMotors()
                      "Arm refused: radio failsafe latched and ping still lost");
             return;
         }
-        ESP_LOGI(TAG_MOTOR_MANAGER, "Radio failsafe cleared (ping recovered) — arming");
+        ESP_LOGI(TAG_MOTOR_MANAGER, "Failsafe cleared (radio + IMU OK) — arming");
         failsafeEngaged = false;
     }
 
@@ -417,6 +441,19 @@ void MotorManager::Task()
         if (!modeHIL && EspNowHandler::pingLost && isMotorArmed)
         {
             ESP_LOGW(TAG_MOTOR_MANAGER, "RADIO FAILSAFE: ping lost > 2 s — auto-disarming");
+            disarmMotors();
+            failsafeEngaged  = true;
+            prevArmingState  = false;
+        }
+
+        // IMU health failsafe (real mode only) — the imu-lib tracks I2C
+        // success/error counts; once the failure threshold is crossed the
+        // sensor is marked unhealthy. Continuing to feed PIDs with stale
+        // attitude after the I2C bus has died would be catastrophic, so
+        // disarm and latch the failsafe (same semantics as radio loss).
+        if (!modeHIL && imu && !imu->isSensorHealthy() && isMotorArmed)
+        {
+            ESP_LOGW(TAG_MOTOR_MANAGER, "IMU FAILSAFE: sensor unhealthy — auto-disarming");
             disarmMotors();
             failsafeEngaged  = true;
             prevArmingState  = false;
