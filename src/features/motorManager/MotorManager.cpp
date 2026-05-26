@@ -656,12 +656,29 @@ void MotorManager::Task()
                                              currentOrientation.yaw);
             }
 
-            // ===== 3.6: MOTOR MIXER (X-Config) =====
-            // Apply motor corrections to throttle setpoint
-            // M0 (Front-Left):    T - pitch + roll + yaw
-            // M1 (Front-Right):   T - pitch - roll - yaw
-            // M2 (Rear-Right):    T + pitch - roll - yaw
-            // M3 (Rear-Left):     T + pitch + roll + yaw
+            // ===== 3.6: MOTOR MIXER (X-Config, diagonales) =====
+            // Apply motor corrections to throttle setpoint. Signes appariés
+            // par DIAGONALE (X-config standard), pas par côté gauche/droite.
+            // Cela permet de câbler des hélices Betaflight "Props In" /
+            // "Props Out" standard (diagonales = même sens de rotation).
+            //
+            //   M0 (Front-Left  / user M1 HG) : T - pitch + roll + yaw
+            //   M1 (Front-Right / user M2 HD) : T - pitch - roll - yaw
+            //   M2 (Rear-Right  / user M3 BD) : T + pitch - roll + yaw  ← +yaw (diag M0)
+            //   M3 (Rear-Left   / user M4 BG) : T + pitch + roll - yaw  ← -yaw (diag M1)
+            //
+            // Diagonales : (M0+M2) ont +yaw, (M1+M3) ont -yaw → leurs
+            // couples de réaction moteur s'additionnent pour produire un
+            // vrai couple yaw sur l'airframe.
+            //
+            // Sens de rotation des hélices (vu de DESSUS, convention
+            // "Props In" Betaflight) :
+            //   M0 (FL/HG) = CW          M1 (FR/HD) = CCW
+            //   M3 (RL/BG) = CCW         M2 (RR/BD) = CW
+            //
+            // Si le drone tourne à l'envers que prévu sur un stick yaw : soit
+            // inverser les signes yaw dans le mixer, soit inverser le sens
+            // physique des hélices (les 4 d'un coup, pas individuel).
 
             // ===== 3.6+3.7: MIXER + SEND TO ESCs (single mutex hold) =====
             // Previously took the mutex 5 times (1 mixer + 4× ESC send). Now
@@ -686,8 +703,8 @@ void MotorManager::Task()
                 } else {
                     motorSpeeds[0] = clampMotor(usableThrottle - motorCorrectionPitch + motorCorrectionRoll + motorCorrectionYaw);
                     motorSpeeds[1] = clampMotor(usableThrottle - motorCorrectionPitch - motorCorrectionRoll - motorCorrectionYaw);
-                    motorSpeeds[2] = clampMotor(usableThrottle + motorCorrectionPitch - motorCorrectionRoll - motorCorrectionYaw);
-                    motorSpeeds[3] = clampMotor(usableThrottle + motorCorrectionPitch + motorCorrectionRoll + motorCorrectionYaw);
+                    motorSpeeds[2] = clampMotor(usableThrottle + motorCorrectionPitch - motorCorrectionRoll + motorCorrectionYaw);
+                    motorSpeeds[3] = clampMotor(usableThrottle + motorCorrectionPitch + motorCorrectionRoll - motorCorrectionYaw);
                 }
 
                 // Dispatch within the same critical section.

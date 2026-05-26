@@ -88,6 +88,21 @@ bool EspNowHandler::init(IMUSensor *imuTmp, MotorManager *motorManager)
     gpio_set_direction(PIN_BUTTON_ASSOCIATION, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_BUTTON_ASSOCIATION, GPIO_PULLUP_ONLY);
 
+    // Pseudo-GND for the association button on GPIO 17, because the drone
+    // PCB has all real GND pin-headers occupied (ESCs / IMU / LED). The
+    // button is wired between PIN_BUTTON_ASSOCIATION (GPIO 16) and this
+    // pin: when the button is pressed, GPIO 16 is pulled LOW through
+    // GPIO 17 (which is forced to 0 V output).
+    //
+    // Drive current is only the leakage of the GPIO 16 internal pull-up
+    // (~10 µA), far below the 40 mA sink limit per GPIO. Safe.
+    //
+    // GPIO 17 chosen because it's adjacent to GPIO 16 on most ESP32
+    // DevKits (compact wiring) and is NOT a strapping pin (safe at boot).
+    // Move to another free non-strapping GPIO if 17 is taken later.
+    gpio_reset_pin(GPIO_NUM_17);
+    gpio_set_direction(GPIO_NUM_17, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_17, 0);  // forced LOW = pseudo-GND
 
     return true;
 }
@@ -95,7 +110,7 @@ bool EspNowHandler::init(IMUSensor *imuTmp, MotorManager *motorManager)
 // Fonction Callback de réception (Statique)
 void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     // Vérification que l'instance existe
-    ESP_LOGI(TAG_ESP_NOW, "Données reçues, longueur: %d", len);
+    // ESP_LOGI(TAG_ESP_NOW, "Données reçues, longueur: %d", len);
     if (instance == nullptr) return;
 
     if (len == sizeof(ControllerRequestData)) {  
@@ -118,7 +133,7 @@ void EspNowHandler::onDataRecv(const esp_now_recv_info_t *info, const uint8_t *d
             // controller will resend at the next tick anyway.
             if (xSemaphoreTake(MotorManager::xControllerRequestMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
                 MotorManager::currentControllerRequestDTO.addInControllerRequestDTO(controllerRequestDTO);
-                ESP_LOGI(TAG_ESP_NOW, "%s", controllerRequestDTO.toString().c_str());
+                // ESP_LOGI(TAG_ESP_NOW, "%s", controllerRequestDTO.toString().c_str());
                 xSemaphoreGive(MotorManager::xControllerRequestMutex);
             } else {
                 ESP_LOGW(TAG_ESP_NOW, "Dropped packet: controller request mutex timeout");
@@ -244,8 +259,8 @@ void EspNowHandler::Task()
                     float motorSpeeds[NUM_MOTORS] = {0};
                     motorManager->getMotorSpeeds(motorSpeeds);
 
-                    ESP_LOGI(TAG_ESP_NOW, "ESPNOWHANDLER Motor Speeds: [%.2f, %.2f, %.2f, %.2f]",
-                             motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
+                    // ESP_LOGI(TAG_ESP_NOW, "ESPNOWHANDLER Motor Speeds: [%.2f, %.2f, %.2f, %.2f]",
+                    //          motorSpeeds[0], motorSpeeds[1], motorSpeeds[2], motorSpeeds[3]);
 
                     // imu-lib v1.1: getSnapshot() retourne TOUS les champs d'une
                     // seule lecture seqlock atomique -> accel/gyro/mag/orientation/
@@ -254,12 +269,17 @@ void EspNowHandler::Task()
                     // 4 getters separes precedents.
                     IMUSensor::SampleBundle snap = imu->getSnapshot();
 
+                    // esp-lib v1.2.1+ : TelemetryDTO uses local POD types
+                    // (TelemetryVector3 etc.) instead of IMUSensor types,
+                    // so the esp-lib is autonomous (controller can build
+                    // without imu-lib). We do the trivial field copy here.
+                    // Same layout / same field names -> aggregate init.
                     TelemetryDTO dto;
-                    dto.accel       = snap.accel;
-                    dto.gyro        = snap.gyro;
-                    dto.mag         = snap.mag;
-                    dto.orientation = snap.orientation;
-                    dto.quaternion  = snap.quaternion;
+                    dto.accel       = { snap.accel.x, snap.accel.y, snap.accel.z };
+                    dto.gyro        = { snap.gyro.x,  snap.gyro.y,  snap.gyro.z  };
+                    dto.mag         = { snap.mag.x,   snap.mag.y,   snap.mag.z   };
+                    dto.orientation = { snap.orientation.roll, snap.orientation.pitch, snap.orientation.yaw };
+                    dto.quaternion  = { snap.quaternion.w, snap.quaternion.x, snap.quaternion.y, snap.quaternion.z };
                     dto.temperature = snap.temperature;
                     dto.timestampUs = snap.timestampUs;
                     memcpy(dto.motorSpeeds, motorSpeeds, sizeof(dto.motorSpeeds));

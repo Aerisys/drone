@@ -68,11 +68,16 @@ private:
     };
 
     // ==================== HARDWARE CONFIG ====================
+    // GPIOs des 4 ESCs. Mapping validé via le projet `motor-test` (Phase 2,
+    // chaque moteur tourne quand le log dit son numéro). Si le câblage
+    // physique évolue, mettre à jour ici. La numérotation (M0..M3) suit la
+    // convention 0-based interne ; côté schéma utilisateur, M0 = M1 (HG),
+    // M1 = M2 (HD), M2 = M3 (BD), M3 = M4 (BG).
     const int escPins[NUM_MOTORS] = {
-        26, // Front-Left (M0)
-        25, // Front-Right (M1)
-        33, // Rear-Right (M2)
-        32  // Rear-Left (M3)
+        32, // Front-Left  (M0 = user M1 Haut-Gauche)
+        33, // Front-Right (M1 = user M2 Haut-Droit)
+        25, // Rear-Right  (M2 = user M3 Bas-Droit)
+        26  // Rear-Left   (M3 = user M4 Bas-Gauche)
     };
     MotorPwmConfig motorPwmConfigs[NUM_MOTORS];
 

@@ -8,7 +8,7 @@
 - **Framework** : ESP-IDF via PlatformIO
 - **Langage** : C++17
 - **Dépendances libs** :
-  - [`imu-lib`](https://github.com/Aerisys/imu-lib) v1.1+ — driver MPU9250 + AK8963, Mahony 9-DOF, INT-driven, seqlock atomique
+  - [`imu-lib`](https://github.com/Aerisys/imu-lib) **v1.2+** — driver MPU9250 + AK8963, Mahony 9-DOF, INT-driven, seqlock atomique, **`setHome` quaternion (roll/pitch mount-offset)** + **fast-init boost Kp**
   - [`esp-lib`](https://github.com/Aerisys/esp-lib) **v1.2+** — DTOs ESP-NOW (POD, zero heap) partagés contrôleur ↔ drone, **inclut `TelemetryDTO` + `NUM_MOTORS`** (centralisés depuis v1.2.0)
 
 ## Fonctionnalités
@@ -46,10 +46,10 @@
 | MPU9250 SDA | `21` | I²C Data |
 | MPU9250 SCL | `22` | I²C Clock |
 | MPU9250 INT | `19` | DATA_READY interrupt (1 kHz) |
-| ESC Front-Left (M0) | `26` | MCPWM group 0 |
-| ESC Front-Right (M1) | `25` | MCPWM group 0 |
-| ESC Rear-Right (M2) | `33` | MCPWM group 1 |
-| ESC Rear-Left (M3) | `32` | MCPWM group 1 |
+| ESC Front-Left  (M0) | `32` | MCPWM group 0 |
+| ESC Front-Right (M1) | `33` | MCPWM group 0 |
+| ESC Rear-Right  (M2) | `25` | MCPWM group 1 |
+| ESC Rear-Left   (M3) | `26` | MCPWM group 1 |
 | LED association | `2` | Output, blink en pairing |
 | Bouton reset pairing | `16` | Input pull-up, long press 5 s |
 
@@ -100,7 +100,8 @@ include/
      │ utilise s.gyro DIRECT (filtré DLPF MPU + optional notch)
      ▼
 [X-config mixer]          throttle ± pitch ± roll ± yaw → 4 ESCs
-     │
+     │ signes yaw appariés par DIAGONALE (M0+M2 = +yaw, M1+M3 = -yaw)
+     │ → câblage hélices "Props In" : M0+M2 = CW, M1+M3 = CCW (vu de dessus)
      ▼
 [MCPWM 50 Hz]
 ```
@@ -162,6 +163,22 @@ Procédure (drone désarmé, télémétrie ouverte) :
 1. Incline le drone sur un axe à la fois → vérifie que l'axe Euler correspondant change dans le bon sens
 2. Si roll/pitch mélangés → `setSwitchRollPitch(true)`
 3. Si un axe inversé (correction PID dans le mauvais sens) → flip le bool correspondant
+
+### Home / mount-offset (imu-lib v1.2+)
+
+Si la PCB IMU n'est pas parfaitement perpendiculaire au chassis (typique : ±3° de tilt résiduel), `setHome()` capture la position courante comme "level chassis" pour roll/pitch (le yaw reste absolu pour le mag heading). Persisté NVS, à faire **une seule fois** par drone :
+
+```cpp
+// Drone posé sur surface PARFAITEMENT plane (niveau à bulle), Mahony convergé (~3 s après boot)
+imu->setHome();   // valide pour tous les boots suivants
+imu->clearHome(); // pour annuler / retour à orientation IMU brute
+```
+
+Voir le bloc commenté dans [`main.cpp`](src/main.cpp) pour les 3 options de trigger (hard-coded, bouton, ESP-NOW).
+
+### Mahony fast-init boost (imu-lib v1.2+, automatique)
+
+Kp boosté à 10 (configurable) pendant 3 s (configurable) au boot et après `calibrateGyroAccel`. Aucune intervention requise — la convergence du quaternion vers la vraie attitude prend désormais ~0.5 s au lieu de 5-10 s. Reconfigurable via `imu->setMahonyBoost(kp, ms)` si besoin.
 
 Voir [`imu-lib`](https://github.com/Aerisys/imu-lib) pour les détails (calibration NVS auto, notch filter optionnel, T° comp gyro).
 

@@ -119,6 +119,57 @@ extern "C" void app_main(void)
     imu->setSwitchRollPitch(false);
     imu->setInvertAxis(false, false, false);
 
+    // ---- Mahony fast-init boost (imu-lib v1.2.0+) -------------------------
+    // AUTOMATIQUE — pas besoin d'appeler quoi que ce soit ici. La lib boost
+    // Kp à 10 pendant 3 s au démarrage du sensor task ET après une
+    // calibrateGyroAccel, ce qui amène le quaternion Mahony de l'identité
+    // (boot) vers l'attitude réelle en < 1 s au lieu de 5-10 s.
+    //
+    // Pour reconfigurer (rare — par défaut OK pour un drone) :
+    //   imu->setMahonyBoost(15.0f, 2000);  // boostKp=15, 2 s au lieu de 3
+    //
+    // Pour forcer un boost manuel (ex: après atterrissage brutal détecté) :
+    //   imu->triggerMahonyBoost();
+    //
+    // Pour désactiver totalement le boost (déconseillé) :
+    //   imu->setMahonyBoost(0.0f, 0);
+
+    // ---- Home / mount-offset (imu-lib v1.2.0+) ----------------------------
+    // setHome() capture la position courante comme "level chassis", uniquement
+    // sur roll/pitch (yaw absolu préservé pour le mag heading). Persisté en
+    // NVS — une fois fait, c'est valide pour tous les boots suivants.
+    //
+    // À déclencher UNE FOIS, drone posé en position "level" (typiquement à
+    // l'assemblage), via l'une des options :
+    //
+    // OPTION A — Trigger codé en dur (le plus simple pour démarrer) :
+    //   Décommente le bloc ci-dessous, flash, place le drone level sur surface
+    //   plane, attends que le boost Mahony se termine (~3 s + temps de boot),
+    //   puis le setHome se fait automatiquement et est persisté. Recommente
+    //   ensuite pour éviter qu'il se redéclenche à chaque boot.
+    //
+    /*
+    if(!motorManager->modeHIL){
+        vTaskDelay(pdMS_TO_TICKS(5000));  // attente convergence Mahony
+        esp_err_t homeErr = imu->setHome();
+        if (homeErr == ESP_OK)
+            ESP_LOGI(TAG_MAIN, "Home set & persisted to NVS. RE-COMMENT THIS BLOCK.");
+        else
+            ESP_LOGE(TAG_MAIN, "setHome failed: %d", homeErr);
+    }
+    */
+    //
+    // OPTION B — Trigger par long-press sur bouton (à wirer plus tard) :
+    //   Adapter la logique de PIN_BUTTON_ASSOCIATION dans EspNowHandler pour
+    //   distinguer long-press court (3 s) = setHome vs très long (5 s) =
+    //   reset pairing.
+    //
+    // OPTION C — Trigger par commande ESP-NOW dédiée :
+    //   Ajouter un nouveau type de packet "SET_HOME" dans esp-lib, envoyé
+    //   depuis le controller via un bouton de configuration.
+    //
+    // Pour effacer un home déjà set : `imu->clearHome();` (persisté NVS aussi)
+
     if(!motorManager->modeHIL){
         // imu->init() auto-loads NVS calibration. Only trigger a fresh
         // gyro/accel calibration if nothing was found on disk — otherwise
